@@ -9,13 +9,13 @@
 
 ## 1. Overview
 
-**JDiskMark** is a cross-platform disk benchmark utility. It measures sustained
+**pydiskmark** is a cross-platform disk benchmark utility. It measures sustained
 sequential and random I/O performance and reports bandwidth (MB/s), latency
 (ms/block), and IOPS.
 
 The tool runs in two modes:
-- **CLI** — primary mode for the Python port; invoked with arguments.
-- **GUI** — Swing desktop app; **out-of-scope for the initial Python port**.
+- **CLI** — primary mode; invoked with `python -m pydiskmark run`.
+- **GUI** — desktop interface built with Tkinter + matplotlib; launch with `python -m pydiskmark gui`.
 
 ---
 
@@ -117,8 +117,6 @@ Captured once at benchmark start; immutable during a run.
 | `write_sync_enabled` | bool | False | |
 | `sector_alignment` | SectorAlignment | ALIGN_4K | |
 | `multi_file_enabled` | bool | True | |
-| `gc_retry_enabled` | bool | False | N/A in Python; retain field for compat |
-| `gc_hints_enabled` | bool | False | N/A in Python; retain field for compat |
 | `test_dir` | str | path | absolute path to data directory |
 
 Helper predicates:
@@ -191,7 +189,6 @@ Aggregated results of one I/O phase.
 | `bw_min` | float | |
 | `acc_avg` | float | final average latency (ms) |
 | `iops` | int | total blocks / elapsed seconds (see §8.4) |
-| `gc_retried_samples` | list[int] | always empty in Python |
 
 Display helpers:
 ```python
@@ -224,7 +221,7 @@ Top-level container for a complete benchmark run.
 Result text output format:
 ```
 -------------------------------------------
-JDiskMark Benchmark Results (vX.Y)
+pydiskmark Benchmark Results (vX.Y)
 -------------------------------------------
 Profile: <name>
 Benchmark: <type>
@@ -592,9 +589,7 @@ Format: `key=value`, one per line, `#` comment lines.
 | `sectorAlignment` | `ALIGN_4K` | |
 | `multiFile` | `true` | |
 | `autoRemoveData` | `true` | |
-| `autoReset` | `true` | |
-| `gcRetryEnabled` | `false` | |
-| `gcHintsEnabled` | `false` | |
+| `autoReset` | `true` |
 
 > **Note:** The Python port does not need to replicate GUI-only properties
 > (`theme`, `palette`, `showMaxMin`, `showDriveAccess`, `showSingleOp`,
@@ -626,7 +621,6 @@ Entry point: `python -m pydiskmark run [OPTIONS]`
 | `--save` | `-s` | flag | False | Persist to local database |
 | `--clean` | `-c` | flag | False | Delete existing data dir first |
 | `--verbose` | `-v` | flag | False | Verbose logging |
-| `--gc-retry` | `-g` | flag | False | (no-op in Python, kept for API compat) |
 
 **Override precedence:** explicit CLI option > profile default.
 
@@ -698,7 +692,7 @@ Same structure as JSON, emitted as YAML without `---` document-start marker.
 Flat table of samples with metadata header as `#` comment lines.
 
 ```
-# JDiskMark x.y Benchmark Summary
+# pydiskmark x.y Benchmark Summary
 # ---------------------------
 # Date: 2026-06-20 14:30:00
 # Model: Samsung 990 Pro
@@ -844,131 +838,200 @@ jdm-python/
 | JPA/Derby database | `sqlite3` (stdlib) |
 | Jackson JSON serialiser | `json` stdlib or `dataclasses-json` |
 | `System.nanoTime()` | `time.perf_counter_ns()` |
-| GC detection / hints | Not applicable; remove or stub out |
+| GC detection / hints | Not applicable in Python — removed from model |
 | `picocli` | `argparse` or `click` |
 | Single-instance lock (`FileLock`) | Not required for CLI-only port |
 
 ---
 
-## 19. Out of Scope for Initial Port
+## 19. Out of Scope
 
-- Swing GUI (`Gui.java`, `MainFrame`, `BenchmarkPanel`, `DrivesPanel`, etc.)
 - SMART data collection (`Smart.java`, `SmartPanel.java`)
 - Community portal upload (`Portal.java`)
 - Windows MSI / Linux DEB / macOS PKG packaging
 
 ---
 
-## 20. GUI — Desktop Interface (Future Phase)
+## 20. GUI — Desktop Interface (Phase 5)
 
-> **Status:** Planned. Depends on Phase 3 (CLI) being complete first.
+> **Status:** Implemented. Launch with `python -m pydiskmark gui`.
 
 ### 20.1 Overview
 
-The GUI provides a visual desktop interface for pydiskmark, replacing the
-Java Swing frontend. The Python GUI should use a cross-platform toolkit
-and replicate the core layout and functionality of the Java version.
+The GUI provides a visual desktop interface that replicates the Java Swing
+frontend's layout and functionality. It uses the same `BenchmarkRunner` /
+`BenchmarkListener` pipeline as the CLI — no changes to the engine layer.
 
-### 20.2 Toolkit Options
+### 20.2 Toolkit Decision
 
-| Toolkit | Pros | Cons |
-|---|---|---|
-| **Tkinter + ttkbootstrap** | Stdlib (zero deps), modern themes via ttkbootstrap, simple | Limited custom widgets |
-| **PySide6 / PyQt6** | Full-featured, charts via QtCharts, native look | Large dependency (~100 MB) |
-| **Dear PyGui** | GPU-rendered, fast charts, modern look | Less mature, non-native |
-| **customtkinter** | Modern flat UI on top of Tkinter | Smaller ecosystem |
+**Chosen: Tkinter + matplotlib + sv-ttk**
 
-### 20.3 Core Panels
+| Factor | Decision |
+|---|---|
+| Toolkit | `tkinter` (stdlib) — zero runtime cost, ships with Python |
+| Theme | `sv-ttk` (Sun Valley) — modern flat dark/light appearance |
+| Chart | `matplotlib` via `FigureCanvasTkAgg` — dual-axis, real-time, well-packaged |
+| Threading | Queue + `root.after(50ms)` polling — all Tkinter mutations on main thread |
 
-#### Main Window
-- **Menu bar**: File (Export, Exit), Settings (Profiles), Help (About)
-- **Toolbar**: Profile selector, Start/Stop button, progress bar
-- **Status bar**: Drive model, capacity percentage, partition letter
+Additional runtime dependencies: `matplotlib>=3.7`, `sv-ttk>=2.5`.
 
-#### Benchmark Panel
-- **Chart area**: Real-time line chart of bandwidth (MB/s) per sample
-  - X-axis: sample number
-  - Y-axis: bandwidth (MB/s)
-  - Optional: show cumulative avg, max, min lines
-- **Results summary**: Avg/Max/Min bandwidth, latency, IOPS
-- **Sample table** (optional): scrollable list of all sample results
-
-#### Settings Panel
-- Profile dropdown (8 predefined profiles)
-- Benchmark type: READ / WRITE / READ_WRITE
-- Block order: SEQUENTIAL / RANDOM
-- I/O Engine: MODERN (Direct I/O toggle replaces engine selection)
-- Direct I/O toggle
-- Write Sync toggle
-- Sector Alignment dropdown
-- Multi-file toggle
-- Threads spinner
-- Blocks spinner
-- Block Size dropdown
-- Samples spinner
-- Location directory chooser
-
-#### Drive Info Panel
-- Drive model name
-- Partition / drive letter
-- Capacity bar (used / total GB, percentage)
-- CPU name
-- OS / Architecture
-
-### 20.4 Real-Time Updates
-
-The GUI must receive updates from `BenchmarkRunner` via the
-`BenchmarkListener` protocol:
-
-```python
-class GuiBenchmarkListener:
-    def on_sample_complete(self, sample: Sample) -> None:
-        # Update chart, results summary (thread-safe via queue or after())
-        ...
-
-    def on_progress_update(self, completed: int, total: int) -> None:
-        # Update progress bar
-        ...
-
-    def is_cancelled(self) -> bool:
-        # Check if user clicked Stop
-        ...
-
-    def attempt_cache_drop(self) -> None:
-        # Show dialog: "Flushing cache..." or manual instructions
-        ...
-```
-
-All listener callbacks come from worker threads. The GUI must dispatch
-updates to the main thread (e.g. via `root.after()` in Tkinter or
-`QMetaObject.invokeMethod` in Qt).
-
-### 20.5 Benchmark Execution Flow (GUI)
+### 20.3 Layout
 
 ```
-1. User selects profile / adjusts settings.
-2. User clicks "Start".
-3. GUI disables controls, shows progress bar.
-4. BenchmarkRunner.execute() runs in a background thread.
-5. on_sample_complete() updates chart in real-time.
-6. on_progress_update() updates progress bar.
-7. attempt_cache_drop() shows modal dialog.
-8. On completion: display results summary, re-enable controls.
-9. If --export or --save: write JSON / save to DB.
+┌────────────────────────────────────────────────────────────────┐
+│  Menu: File | Action | Options | Help                          │
+├───┬────────────────────────────────────────────────────────────┤
+│ D │  Drives tab selected:                                      │
+│ r │    DrivesPanel fills the ENTIRE content area               │
+│ i │    (drive selector, info card, all-drives table, test dir) │
+│ v │                                                            │
+│ e │  Benchmark tab selected:                                   │
+│ s │  ┌──────────────┬──────────────────────────────────────┐  │
+│   │  │ ControlPanel │          ChartPanel                  │  │
+│ B │  │ (340 px)     │  (matplotlib dual-axis, fills rest)  │  │
+│ e │  │ settings /   │                                      │  │
+│ n │  │ start/stop / │                                      │  │
+│ c │  │ metrics grid │                                      │  │
+│ h │  └──────────────┴──────────────────────────────────────┘  │
+├───┴────────────────────────────────────────────────────────────┤
+│  [Benchmark Operations] [Events]                               │
+│   HistoryPanel — treeview of past operations                   │
+├────────────────────────────────────────────────────────────────┤
+│  Status text          [progress bar]  Total Tx (KB): N         │
+└────────────────────────────────────────────────────────────────┘
 ```
 
-### 20.6 Export / Save from GUI
+### 20.4 Module Structure
 
-- **Export**: File → Export → choose format (JSON/YAML/CSV) + path
-- **Save**: File → Save to DB (writes to `~/.pdm/<version>/pdm.db`)
-- **History**: File → View History → list past benchmarks from DB
+```
+pydiskmark/
+├── db.py                    ← SQLite persistence (Phase 5)
+└── gui/
+    ├── __init__.py          ← launch_gui() entry point
+    ├── theme.py             ← sv_ttk dark/light + chart colour palette
+    ├── listener.py          ← GuiListener — queue-based BenchmarkListener
+    ├── chart_panel.py       ← matplotlib FigureCanvasTkAgg, dual-axis
+    ├── control_panel.py     ← Benchmark tab — settings combos + results grid
+    ├── drives_panel.py      ← Drives tab — drive list, info card, dir chooser
+    ├── history_panel.py     ← Benchmark Operations tab — DB history treeview
+    └── main_window.py       ← MainWindow orchestrator
+```
 
-### 20.7 Design Principles
+### 20.5 Left-Tab Panels
 
-- Match the Java GUI's functional layout but use modern flat/dark styling
-- Responsive layout that adapts to window resizing
-- Keyboard shortcuts: Ctrl+R (run), Ctrl+S (save), Escape (stop)
-- System tray icon (optional) for long-running benchmarks
+#### Drives Tab (`DrivesPanel`)
+- Top: drive selector dropdown (Drive letter — capacity)
+- Left sub-panel: Drive Info card
+  - Drive model, partition, usage percentage, used/total GB
+  - Access indicators: Read ✓ / Write ✓
+  - Usage progress bar
+- Right sub-panel: All Drives table
+  - Columns: Drive/Mount | Total (GB) | Used (GB) | Free (GB) | Usage %
+  - Click a row → update drive info card + set `app.location_dir`
+- Bottom: Test Directory path display + Browse button
+
+#### Benchmark Tab (`ControlPanel`)
+- Profile, Type, Threads, Block Order, Blocks/Sample, Block Size (KB), Samples — dropdowns
+- Start / Stop button (toggles, disables combos during run)
+- Results grid: 3-column (Metric | Write | Read) for MB/s, Lat (ms), IOPS
+
+### 20.6 Chart (`ChartPanel`)
+
+- Left Y-axis: Bandwidth (MB/s)
+- Right Y-axis: Latency (ms)
+- X-axis: Sample number
+- Series:
+  - Write BW — solid orange line
+  - Write Avg — dashed orange line
+  - Write Latency — small orange square markers (right axis)
+  - Read BW — solid cyan line
+  - Read Avg — dashed cyan line
+  - Read Latency — small cyan square markers (right axis)
+- Batched redraws every 3rd sample to avoid lag at high sample counts
+- `set_title(str)` — updates the chart suptitle with drive info
+- `retheme()` — reapply colours after dark/light toggle
+
+### 20.7 Threading Model
+
+```
+Worker thread (BenchmarkRunner)
+  └─ GuiListener.on_sample_complete()  ──→  queue.put((EVT_SAMPLE, sample))
+  └─ GuiListener.on_progress_update()  ──→  queue.put((EVT_PROGRESS, %, %))
+  └─ GuiListener.attempt_cache_drop()  ──→  queue.put((EVT_CACHE_DROP, event))
+                                             blocks until main thread sets event
+  └─ _run_worker() completes           ──→  queue.put((EVT_COMPLETE, benchmark))
+
+Main thread (Tkinter)
+  └─ _poll_queue() every 50 ms via root.after()
+       drains queue → updates chart, progress bar, metrics labels
+       on EVT_COMPLETE → saves to DB, refreshes history, re-enables controls
+```
+
+After the worker thread dies, `_poll_queue` performs one extra drain to
+catch `EVT_COMPLETE` posted just before thread exit (eliminates the
+"Benchmark cancelled" false-positive race condition).
+
+### 20.8 Persistence (`db.py`)
+
+**DB location:** `~/.pdm/<version>/pdm.db` (SQLite, stdlib `sqlite3`).
+
+**Schema** — one row per benchmark operation:
+
+```sql
+CREATE TABLE benchmark_ops (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    group_id      TEXT,    -- UUID shared by ops from the same run
+    drive_model   TEXT,
+    partition_id  TEXT,
+    profile       TEXT,
+    benchmark_type TEXT,
+    io_mode       TEXT,    -- WRITE | READ
+    block_order   TEXT,
+    num_samples   INTEGER,
+    num_blocks    INTEGER,
+    block_size_kb INTEGER,
+    num_threads   INTEGER,
+    start_time    TEXT,
+    elapsed_ms    INTEGER,
+    lat_avg_ms    REAL,
+    iops          INTEGER,
+    bw_mb_sec     REAL,
+    data_json     TEXT     -- full benchmark JSON for chart replay
+);
+```
+
+Benchmarks are **auto-saved** after each successful run. Double-clicking a
+row in the "Benchmark Operations" history tab replays that benchmark in the
+chart without re-running I/O.
+
+### 20.9 Benchmark Execution Flow (GUI)
+
+```
+1. User selects drive (Drives tab) — sets location_dir
+2. User selects profile / adjusts settings (Benchmark tab)
+3. User clicks Start (or Ctrl+R)
+4. GUI disables controls, clears chart, resets metrics
+5. BenchmarkRunner.execute() runs in a daemon thread
+6. on_sample_complete() → queue → chart.add_sample() every 50 ms
+7. on_progress_update() → queue → progress bar update
+8. attempt_cache_drop() → queue → modal dialog, blocks worker until dismissed
+9. EVT_COMPLETE → db.save_benchmark() → history.refresh() → re-enable controls
+10. Elapsed time shown in status bar; drive info refreshed
+```
+
+### 20.10 Export from GUI
+
+- **File → Export**: file dialog → JSON / YAML / CSV (reuses `exporter.export()`)
+- **Double-click history row**: replay historical benchmark in chart (no re-run)
+
+### 20.11 Design Principles
+
+- Left-tab layout matches jdm-java (Drives | Benchmark vertical tabs)
+- Dark mode by default via sv_ttk; Options → Toggle Theme switches to light
+- Keyboard shortcuts: `Ctrl+R` (start), `Esc` (stop)
+- About dialog centred on the parent window (`transient + grab_set`)
+- Window title: `pydiskmark <version> — <arch> — <CPU>`
+- Chart suptitle: `<drive model> — <partition>: <pct>% (<used>/<total> GB)`
 
 ---
 

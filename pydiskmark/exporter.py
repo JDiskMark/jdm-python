@@ -122,6 +122,11 @@ def _benchmark_dict(benchmark: Benchmark) -> dict:
     return d
 
 
+def benchmark_to_dict(benchmark: Benchmark) -> dict:
+    """Public alias for _benchmark_dict — used by db.py for persistence."""
+    return _benchmark_dict(benchmark)
+
+
 # ---------------------------------------------------------------------------
 # JSON
 # ---------------------------------------------------------------------------

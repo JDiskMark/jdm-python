@@ -8,7 +8,7 @@ Key responsibilities:
   - Throttled progress updates (UPDATE_INTERVAL_MS = 25)
   - Delegating per-sample I/O to Sample methods
   - Calling app.update_metrics() for running stats
-  - Driving cache-drop via the listener between WRITE and READ phases
+  - Driving the WRITE→READ transition between benchmark phases
 """
 from __future__ import annotations
 
@@ -52,9 +52,7 @@ class BenchmarkListener(Protocol):
         """Return True to abort the benchmark early."""
         ...
 
-    def attempt_cache_drop(self) -> None:
-        """Request an OS page-cache flush before the READ phase."""
-        ...
+
 
 
 # ---------------------------------------------------------------------------
@@ -169,18 +167,6 @@ class BenchmarkRunner:
             self._run_read_preparation(ranges)
 
         self._throttled_progress_update(force=True)
-
-        # Cache drop between WRITE and READ phases
-        # Skip when Direct I/O is active (kernel already bypasses cache)
-        # except on macOS where Direct I/O does NOT bypass the page cache.
-        import platform as _platform
-        is_macos = _platform.system() == "Darwin"
-        if (
-            not self.listener.is_cancelled()
-            and self.config.has_read_operation()
-            and (not self.config.direct_io_enabled or is_macos)
-        ):
-            self.listener.attempt_cache_drop()
 
         if self.config.has_read_operation() and not self.listener.is_cancelled():
             self._run_operation(benchmark, IOMode.READ, ranges)

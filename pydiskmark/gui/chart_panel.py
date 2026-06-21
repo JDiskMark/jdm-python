@@ -9,6 +9,7 @@ Mirrors the JFreeChart setup in jdm-java's Gui.createChartPanel():
 """
 from __future__ import annotations
 
+import bisect
 import tkinter as tk
 from typing import Optional
 
@@ -49,9 +50,8 @@ class ChartPanel(tk.Frame):
         self._canvas = FigureCanvasTkAgg(self._fig, master=self)
         self._canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
 
-        # Batch counter — redraw every N samples to avoid lag at high sample counts
-        self._pending_updates = 0
-        self._REDRAW_INTERVAL = 3  # redraw every 3rd sample (or on force)
+        # Batch counter — set True when new data has arrived but not yet rendered
+        self._has_pending = False
 
         self._apply_style()
 
@@ -105,28 +105,31 @@ class ChartPanel(tk.Frame):
     # ------------------------------------------------------------------
 
     def add_sample(self, sample: Sample) -> None:
-        """Append a sample data point and schedule a redraw."""
-        if sample.type_ == IOMode.WRITE:
-            self._w_x.append(sample.sample_num)
-            self._w_bw.append(sample.bw_mb_sec)
-            self._w_avg.append(sample.cum_avg)
-            self._w_lat.append(sample.access_time_ms)
-        else:
-            self._r_x.append(sample.sample_num)
-            self._r_bw.append(sample.bw_mb_sec)
-            self._r_avg.append(sample.cum_avg)
-            self._r_lat.append(sample.access_time_ms)
+        """Insert a sample in sorted sample-number order.
 
-        self._pending_updates += 1
-        if self._pending_updates >= self._REDRAW_INTERVAL:
-            self._redraw_all()
-            self._pending_updates = 0
+        Data is kept sorted via bisect so concurrent-thread samples arrive
+        in x-order for rendering.  Does NOT trigger a redraw — callers
+        should call flush() once after a batch of add_sample() calls.
+        """
+        if sample.type_ == IOMode.WRITE:
+            pos = bisect.bisect_left(self._w_x, sample.sample_num)
+            self._w_x.insert(pos, sample.sample_num)
+            self._w_bw.insert(pos, sample.bw_mb_sec)
+            self._w_avg.insert(pos, sample.cum_avg)
+            self._w_lat.insert(pos, sample.access_time_ms)
+        else:
+            pos = bisect.bisect_left(self._r_x, sample.sample_num)
+            self._r_x.insert(pos, sample.sample_num)
+            self._r_bw.insert(pos, sample.bw_mb_sec)
+            self._r_avg.insert(pos, sample.cum_avg)
+            self._r_lat.insert(pos, sample.access_time_ms)
+        self._has_pending = True
 
     def flush(self) -> None:
-        """Force a redraw of any pending updates."""
-        if self._pending_updates > 0:
+        """Redraw the chart if there is new data since the last flush."""
+        if self._has_pending:
             self._redraw_all()
-            self._pending_updates = 0
+            self._has_pending = False
 
     def clear(self) -> None:
         """Clear all data and redraw an empty chart."""
@@ -138,7 +141,7 @@ class ChartPanel(tk.Frame):
         self._r_bw.clear()
         self._r_avg.clear()
         self._r_lat.clear()
-        self._pending_updates = 0
+        self._has_pending = False
         self._redraw_all()
 
     # ------------------------------------------------------------------
@@ -165,12 +168,16 @@ class ChartPanel(tk.Frame):
         self._ax_lat.set_ylabel("Latency (ms)", color=style["text"], fontsize=10)
         self._ax_lat.tick_params(colors=style["text"], labelsize=8)
 
+        # Sort each series by sample number so concurrent-thread samples
+        # are rendered in x-order. Data is kept sorted at insertion time
+        # (via bisect in add_sample), so no sort is needed here.
+
         # Plot write series
         if self._w_x:
             self._ax_bw.plot(
                 self._w_x, self._w_bw,
                 color=theme.WRITE_COLOR, linewidth=1.2,
-                label="Write", alpha=0.9,
+                label="Write BW", alpha=0.9,
             )
             self._ax_bw.plot(
                 self._w_x, self._w_avg,
@@ -188,7 +195,7 @@ class ChartPanel(tk.Frame):
             self._ax_bw.plot(
                 self._r_x, self._r_bw,
                 color=theme.READ_COLOR, linewidth=1.2,
-                label="Read", alpha=0.9,
+                label="Read BW", alpha=0.9,
             )
             self._ax_bw.plot(
                 self._r_x, self._r_avg,
@@ -201,7 +208,7 @@ class ChartPanel(tk.Frame):
                 label="Read Lat", alpha=0.6, zorder=5,
             )
 
-        # Legend — combine handles from both axes
+        # Legend — combine handles from both axes so all 6 series appear
         handles_bw, labels_bw = self._ax_bw.get_legend_handles_labels()
         handles_lat, labels_lat = self._ax_lat.get_legend_handles_labels()
         all_handles = handles_bw + handles_lat
@@ -216,3 +223,4 @@ class ChartPanel(tk.Frame):
 
         self._fig.tight_layout(pad=1.5)
         self._canvas.draw_idle()
+

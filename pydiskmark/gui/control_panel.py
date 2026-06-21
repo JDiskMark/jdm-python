@@ -250,6 +250,67 @@ class ControlPanel(ttk.Frame):
         self._block_size_var.set(str(app.block_size_kb))
         self._samples_var.set(str(app.num_of_samples))
 
+    def load_settings_from_data(self, data: dict) -> None:
+        """Restore dropdowns and app state from a saved benchmark dict.
+
+        *data* is the top-level dict produced by exporter.benchmark_to_dict()
+        (keys: config, driveInfo, operations, …).  Missing keys are silently
+        ignored so an incomplete record never crashes the UI.
+        """
+        from ..benchmark import BenchmarkType, BlockSequence
+        from ..benchmark_profile import BenchmarkProfile
+
+        cfg = data.get("config", {})
+
+        # --- Profile ---
+        profile_sym = cfg.get("profile", "")
+        try:
+            profile = BenchmarkProfile.from_symbol(profile_sym)
+            app.load_profile(profile)
+        except (ValueError, AttributeError):
+            pass  # unrecognised profile — leave current selection
+
+        # --- Type (overrides the profile default when present) ---
+        type_val = cfg.get("benchmarkType", "")
+        for bt in BenchmarkType:
+            if bt.value == type_val:
+                app.benchmark_type = bt
+                break
+
+        # --- Threads ---
+        try:
+            app.num_of_threads = int(cfg["numThreads"])
+        except (KeyError, ValueError, TypeError):
+            pass
+
+        # --- Block order ---
+        order_val = cfg.get("blockOrder", "")
+        for bs in BlockSequence:
+            if bs.value == order_val or bs.name == order_val:
+                app.block_sequence = bs
+                break
+
+        # --- Blocks ---
+        try:
+            app.num_of_blocks = int(cfg["numBlocks"])
+        except (KeyError, ValueError, TypeError):
+            pass
+
+        # --- Block size ---
+        try:
+            app.block_size_kb = int(cfg["blockSizeKb"])
+        except (KeyError, ValueError, TypeError):
+            pass
+
+        # --- Samples ---
+        try:
+            app.num_of_samples = int(cfg["numSamples"])
+        except (KeyError, ValueError, TypeError):
+            pass
+
+        # Reflect updated app state back into the combo boxes
+        self.refresh_from_app()
+
     def refresh_write_metrics(self) -> None:
         """Update write results labels from app state."""
         self._w_bw_label.config(

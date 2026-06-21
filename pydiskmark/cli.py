@@ -76,12 +76,6 @@ class CliListener:
     def is_cancelled(self) -> bool:
         return self._cancelled.is_set()
 
-    def attempt_cache_drop(self) -> None:
-        """Flush and drop the OS page cache between WRITE and READ phases."""
-        sys.stderr.write("\n[Cache] Flushing OS page cache...\n")
-        sys.stderr.flush()
-        from .util_os import flush_and_drop_cache
-        flush_and_drop_cache()
 
     # --- Terminal helpers ---
 

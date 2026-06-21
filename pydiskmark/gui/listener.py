@@ -16,7 +16,6 @@ from ..sample import Sample
 # Event type constants
 EVT_SAMPLE = "sample"
 EVT_PROGRESS = "progress"
-EVT_CACHE_DROP = "cache_drop"
 EVT_COMPLETE = "complete"
 EVT_ERROR = "error"
 
@@ -46,18 +45,7 @@ class GuiListener:
         """Check if the user has requested cancellation."""
         return self._cancelled.is_set()
 
-    def attempt_cache_drop(self) -> None:
-        """Request a cache-drop dialog on the main thread.
-
-        Posts a cache_drop event with a threading.Event and blocks
-        the worker thread until the main thread dismisses the dialog
-        and sets the event.
-        """
-        done = threading.Event()
-        self._queue.put((EVT_CACHE_DROP, done))
-        done.wait()  # blocks worker until main thread sets it
-
-    # --- Control methods (called from main thread) ---
+    # --- Control methods ---
 
     def cancel(self) -> None:
         """Signal the benchmark to stop."""

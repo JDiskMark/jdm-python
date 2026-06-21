@@ -48,7 +48,7 @@ from .control_panel import ControlPanel
 from .drives_panel import DrivesPanel
 from .history_panel import HistoryPanel
 from .listener import (
-    EVT_CACHE_DROP, EVT_COMPLETE, EVT_ERROR,
+    EVT_COMPLETE, EVT_ERROR,
     EVT_PROGRESS, EVT_SAMPLE, GuiListener,
 )
 from . import theme
@@ -207,9 +207,6 @@ class MainWindow:
         # Apply dark theme
         theme.apply_dark_theme()
 
-        # Set icon (best-effort)
-        self._set_icon()
-
         # Listener and run state
         self._listener = GuiListener()
         self._benchmark = None
@@ -226,25 +223,11 @@ class MainWindow:
         # Keyboard shortcuts
         self._root.bind("<Control-r>", lambda _: self._start_benchmark())
         self._root.bind("<Escape>", lambda _: self._stop_benchmark())
+        self._root.bind("<Control-l>", lambda _: self._clear_chart())
 
         self._root.protocol("WM_DELETE_WINDOW", self._on_close)
         self._refresh_status()
 
-    # ------------------------------------------------------------------
-    # Icon
-    # ------------------------------------------------------------------
-
-    def _set_icon(self) -> None:
-        for candidate in [
-            Path(r"c:\Users\james\git\jdm-media\icons\jdm-turtle-logo.ico"),
-            Path(__file__).resolve().parents[4] / "jdm-media/icons/jdm-turtle-logo.ico",
-        ]:
-            if candidate.exists():
-                try:
-                    self._root.iconbitmap(str(candidate))
-                    return
-                except tk.TclError:
-                    pass
 
     # ------------------------------------------------------------------
     # Menu
@@ -262,6 +245,8 @@ class MainWindow:
         action_menu = tk.Menu(menubar, tearoff=0)
         action_menu.add_command(label="Start\tCtrl+R", command=self._start_benchmark)
         action_menu.add_command(label="Stop\tEsc", command=self._stop_benchmark)
+        action_menu.add_separator()
+        action_menu.add_command(label="Clear Chart\tCtrl+L", command=self._clear_chart)
         menubar.add_cascade(label="Action", menu=action_menu)
 
         options_menu = tk.Menu(menubar, tearoff=0)
@@ -336,7 +321,8 @@ class MainWindow:
         # Benchmark Operations tab
         ops_frame = ttk.Frame(self._bottom_nb)
         self._history = HistoryPanel(
-            ops_frame, on_load=self._load_from_history,
+            ops_frame,
+            on_load=lambda benchmark_id: self._root.after(0, self._load_from_history, benchmark_id),
         )
         self._history.pack(fill=tk.BOTH, expand=True)
         self._bottom_nb.add(ops_frame, text="Benchmark Operations")
@@ -460,6 +446,12 @@ class MainWindow:
         self._listener.cancel()
         self._status_label.config(text="Cancelling…")
 
+    def _clear_chart(self) -> None:
+        """Clear all chart data and reset the metrics display."""
+        self._chart.clear()
+        self._controls.reset_metrics()
+        self._log_event("Chart cleared")
+
     # ------------------------------------------------------------------
     # Queue polling — bridge between worker thread and Tkinter
     # ------------------------------------------------------------------
@@ -468,6 +460,8 @@ class MainWindow:
         events = self._listener.drain()
 
         should_reschedule = True
+        needs_write_refresh = False
+        needs_read_refresh = False
 
         for event in events:
             evt_type = event[0]
@@ -476,9 +470,9 @@ class MainWindow:
                 sample = event[1]
                 self._chart.add_sample(sample)
                 if sample.type_ == IOMode.WRITE:
-                    self._controls.refresh_write_metrics()
+                    needs_write_refresh = True
                 else:
-                    self._controls.refresh_read_metrics()
+                    needs_read_refresh = True
 
             elif evt_type == EVT_PROGRESS:
                 completed = event[1]
@@ -488,18 +482,6 @@ class MainWindow:
                     text=f"Total Tx (KB): {done_kb:,} / {self._target_tx_kb:,}"
                 )
 
-            elif evt_type == EVT_CACHE_DROP:
-                done_event = event[1]
-                messagebox.showinfo(
-                    "Clear Disk Cache",
-                    "For a valid READ benchmark, please clear the disk cache now.\n\n"
-                    "  Linux:   sudo sh -c 'sync; echo 1 > /proc/sys/vm/drop_caches'\n"
-                    "  macOS:   sudo purge\n"
-                    "  Windows: EmptyStandbyList.exe or RAMMap.exe\n\n"
-                    "Click OK when the cache has been cleared.",
-                    parent=self._root,
-                )
-                done_event.set()
 
             elif evt_type == EVT_COMPLETE:
                 self._benchmark = event[1]
@@ -511,6 +493,14 @@ class MainWindow:
                 self._on_benchmark_error(event[1])
                 should_reschedule = False
                 break
+
+        # One chart redraw per poll cycle, not one per sample
+        self._chart.flush()
+        if needs_write_refresh:
+            self._controls.refresh_write_metrics()
+        if needs_read_refresh:
+            self._controls.refresh_read_metrics()
+
 
         if not should_reschedule:
             return
@@ -577,27 +567,55 @@ class MainWindow:
     # Load benchmark from history (DB replay)
     # ------------------------------------------------------------------
 
-    def _load_from_history(self, db_id: int) -> None:
-        """Replay a historical benchmark into the chart."""
-        try:
-            from .. import db
-            data = db.load_benchmark_json(db_id)
-        except Exception:
-            data = None
+    def _load_from_history(self, benchmark_id: str) -> None:
+        """Replay a historical benchmark into the chart and restore its settings.
 
-        if not data:
-            messagebox.showwarning("Load Error", "Could not load benchmark data.", parent=self._root)
+        Loads benchmark metadata for UI restoration, then reads each
+        operation's sample file and plots them sequentially (Write first,
+        then Read) with a single flush at the end.
+        """
+        from .. import db
+
+        metadata = db.load_benchmark(benchmark_id)
+        if not metadata:
+            messagebox.showwarning(
+                "Load Error", "Could not load benchmark data.", parent=self._root
+            )
             return
 
+        ops = db.load_benchmark_ops(benchmark_id)
+        if not ops:
+            messagebox.showwarning(
+                "Load Error", "No operations found for this benchmark.", parent=self._root
+            )
+            return
+
+        # ── Reset chart and metrics ──
         self._chart.clear()
         self._controls.reset_metrics()
 
-        # Reconstruct samples for the chart from the JSON
-        for op in data.get("operations", []):
-            mode_str = op.get("ioMode", "WRITE")
-            mode = IOMode.WRITE if mode_str == "WRITE" else IOMode.READ
-            for s in op.get("samples", []):
-                # Build a lightweight sample-like object
+        # ── Restore control panel settings from benchmark config ──
+        self._controls.load_settings_from_data(metadata)
+
+        # ── Plot each operation sequentially (Write then Read) ──
+        # ops are already ordered Write-first by the DB query.
+        # We add all samples from all ops before the single flush so
+        # the chart renders both series in one pass — fast and race-free.
+        import pydiskmark.app as _app
+        _app.reset_test_data()
+
+        for op_row in ops:
+            op_data = db.load_op_data(op_row["data_file_path"])
+            if not op_data:
+                continue
+
+            mode_str = op_data.get("ioMode", "")
+            try:
+                mode = IOMode(mode_str)
+            except ValueError:
+                mode = IOMode.WRITE
+
+            for s in op_data.get("samples", []):
                 sample = _HistorySample(
                     type_=mode,
                     sample_num=s.get("sn", 0),
@@ -607,17 +625,39 @@ class MainWindow:
                 )
                 self._chart.add_sample(sample)
 
+            # Restore summary metrics
+            bw   = op_data.get("bandwidth", -1.0)
+            lat  = op_data.get("latency",   -1.0)
+            iops = op_data.get("iops",      -1)
+            if mode == IOMode.WRITE:
+                _app.w_avg  = bw
+                _app.w_acc  = lat
+                _app.w_iops = iops
+            else:
+                _app.r_avg  = bw
+                _app.r_acc  = lat
+                _app.r_iops = iops
+
+        # One render pass covering all operations
         self._chart.flush()
+        self._controls.refresh_write_metrics()
+        self._controls.refresh_read_metrics()
 
-        # Update chart title
-        di = data.get("driveInfo", {})
+        # ── Update chart title ──
+        di    = metadata.get("driveInfo", {})
         model = di.get("driveModel", "—")
-        pct = di.get("percentUsed", 0)
-        used = di.get("usedGb", 0)
+        pct   = di.get("percentUsed", 0)
+        used  = di.get("usedGb", 0)
         total = di.get("totalGb", 0)
-        self._chart.set_title(f"{model}  —  {pct:.0f}%  ({used:.0f}/{total:.0f} GB)")
+        self._chart.set_title(
+            f"{model}  —  {pct:.0f}%  ({used:.0f}/{total:.0f} GB)"
+        )
 
-        self._log_event(f"Loaded benchmark #{db_id} from history")
+        # ── Switch to the Benchmark tab so the chart is visible ──
+        self._left_nb.select(1)
+
+        self._log_event(f"Loaded benchmark {benchmark_id[:8]}… from history")
+
 
     # ------------------------------------------------------------------
     # Events log
@@ -667,21 +707,44 @@ class MainWindow:
         self._left_nb.retheme()
 
     def _show_about(self) -> None:
-        """Show the About dialog centred on the main window."""
+        """Show the About dialog with turtle icon on the left, info on the right."""
         dlg = tk.Toplevel(self._root)
         dlg.title("About pydiskmark")
         dlg.resizable(False, False)
-        dlg.transient(self._root)   # stays above parent
-        dlg.grab_set()              # modal
+        dlg.transient(self._root)
+        dlg.grab_set()
 
-        ttk.Label(dlg, text=f"pydiskmark  {app.VERSION}",
-                  font=("", 13, "bold")).pack(padx=30, pady=(20, 5))
-        ttk.Label(dlg, text=f"Python: {sys.version.split()[0]}").pack(pady=2)
-        ttk.Label(dlg, text=f"OS: {app.os_name}  {app.arch}").pack(pady=2)
-        ttk.Label(dlg, text=f"CPU: {app.processor_name}").pack(pady=2)
-        ttk.Separator(dlg, orient="horizontal").pack(fill=tk.X, padx=20, pady=10)
-        ttk.Label(dlg, text="Apache License 2.0", foreground="gray").pack(pady=(0, 5))
-        ttk.Button(dlg, text="OK", command=dlg.destroy, width=10).pack(pady=(0, 20))
+        outer = ttk.Frame(dlg)
+        outer.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
+
+        # ── Left: turtle icon ──
+        icon_frame = ttk.Frame(outer)
+        icon_frame.pack(side=tk.LEFT, padx=(0, 20), anchor="n")
+
+        icon_path = Path(__file__).parent / "turtle_icon.png"
+        self._about_img = None  # keep reference to prevent GC
+        try:
+            from PIL import Image, ImageTk
+            img = Image.open(str(icon_path)).resize((220, 220), Image.LANCZOS)
+            self._about_img = ImageTk.PhotoImage(img)
+            tk.Label(icon_frame, image=self._about_img, bd=0).pack()
+        except Exception:
+            # Pillow not available or image missing — show text placeholder
+            ttk.Label(icon_frame, text="🐢", font=("", 60)).pack()
+
+        # ── Right: text info ──
+        info_frame = ttk.Frame(outer)
+        info_frame.pack(side=tk.LEFT, anchor="n")
+
+        ttk.Label(info_frame, text=f"pydiskmark  {app.VERSION}",
+                  font=("", 13, "bold")).pack(anchor="w", pady=(4, 8))
+        ttk.Label(info_frame, text=f"Python: {sys.version.split()[0]}").pack(anchor="w", pady=2)
+        ttk.Label(info_frame, text=f"OS: {app.os_name}  {app.arch}").pack(anchor="w", pady=2)
+        ttk.Label(info_frame, text=f"CPU: {app.processor_name}").pack(anchor="w", pady=2)
+        ttk.Separator(info_frame, orient="horizontal").pack(fill=tk.X, pady=10)
+        ttk.Label(info_frame, text="Apache License 2.0",
+                  foreground="gray").pack(anchor="w", pady=(0, 10))
+        ttk.Button(info_frame, text="OK", command=dlg.destroy, width=10).pack(anchor="w")
 
         # Centre over parent
         dlg.update_idletasks()

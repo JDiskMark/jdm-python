@@ -1,5 +1,7 @@
 # pydiskmark
 
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
+
 A cross-platform disk benchmark utility written in Python.
 Sister project to [jdm-java](https://github.com/jdm-java/jdm-java).
 
@@ -48,3 +50,7 @@ python -m pydiskmark run --help
 ```bash
 python -m pytest tests/
 ```
+
+## License
+
+Apache License 2.0 — see [LICENSE](LICENSE).

@@ -29,6 +29,11 @@ VERSION: str = "0.1.0"
 APP_NAME: str = "pydiskmark"
 DATADIRNAME: str = "pdm-data"
 
+# Cache directory mirrors ~/.jdm/<VERSION>/ in jdm-java.
+# Resolved at runtime (after VERSION is set) via config._cache_dir().
+APP_CACHE_DIR_NAME: str = str(Path.home() / ".pdm" / VERSION)
+APP_CACHE_DIR: Path = Path(APP_CACHE_DIR_NAME)
+
 # ---------------------------------------------------------------------------
 # Application mode
 # ---------------------------------------------------------------------------
@@ -80,6 +85,11 @@ auto_save: bool = False
 auto_remove_data: bool = True
 auto_reset: bool = True
 verbose: bool = False
+
+# Internal: last-loaded theme string from pdm.properties.
+# Written by config.load_config(); read by gui/__init__.py to apply before
+# MainWindow is constructed (sv_ttk requires an active Tk root).
+_saved_theme: str = "dark"
 
 # ---------------------------------------------------------------------------
 # File system locations
@@ -144,6 +154,11 @@ def init() -> None:
     is_admin = _elevated
     is_root = _elevated
 
+    # Load persisted settings (mirrors App.loadConfig() call in App.init()).
+    # Must happen before location_dir defaulting so a saved path is honoured.
+    from . import config as _config
+    _config.load_config()
+
     if not location_dir:
         location_dir = str(Path.home())
     if not data_dir:
@@ -163,25 +178,33 @@ def _get_username() -> str:
 
 
 def load_profile(profile: BenchmarkProfile) -> None:
-    """Apply all settings from *profile* to global state."""
+    """Apply all settings from *profile* to global state.
+
+    Mirrors App.loadProfile() in jdm-java which calls saveConfig() in a
+    finally block after updating all fields.
+    """
     global active_profile, profile_modified
     global benchmark_type, block_sequence, num_of_threads, num_of_samples
     global num_of_blocks, block_size_kb, io_engine, direct_enable
     global write_sync_enable, sector_alignment, multi_file
 
-    active_profile = profile
-    profile_modified = False
-    benchmark_type = profile.benchmark_type
-    block_sequence = profile.block_sequence
-    num_of_threads = profile.num_threads
-    num_of_samples = profile.num_samples
-    num_of_blocks = profile.num_blocks
-    block_size_kb = profile.block_size_kb
-    io_engine = profile.io_engine
-    direct_enable = profile.direct_enable
-    write_sync_enable = profile.write_sync_enable
-    sector_alignment = profile.sector_alignment
-    multi_file = profile.multi_file
+    try:
+        active_profile = profile
+        profile_modified = False
+        benchmark_type = profile.benchmark_type
+        block_sequence = profile.block_sequence
+        num_of_threads = profile.num_threads
+        num_of_samples = profile.num_samples
+        num_of_blocks = profile.num_blocks
+        block_size_kb = profile.block_size_kb
+        io_engine = profile.io_engine
+        direct_enable = profile.direct_enable
+        write_sync_enable = profile.write_sync_enable
+        sector_alignment = profile.sector_alignment
+        multi_file = profile.multi_file
+    finally:
+        from . import config as _config
+        _config.save_config()
 
 
 # ---------------------------------------------------------------------------

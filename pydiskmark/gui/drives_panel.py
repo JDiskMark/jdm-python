@@ -1,9 +1,21 @@
-"""DrivesPanel — drive selection and info tab.
+"""DrivesPanel - drive selection and info tab.
 
-Mirrors jdm-java's Drives tab / SelectDriveFrame:
-  Left:  Drive Info card (model, partition, usage, access)
-  Right: All Drives table (Drive/Mount, Total, Used, Free, Usage %)
-  Bottom: Test Directory path + Browse button
+Mirrors jdm-java Drives tab / SelectDriveFrame.
+
+Startup performance
+-------------------
+refresh() is split into two phases:
+
+  FAST (main thread, <5 ms):
+    Enumerate drives and call shutil.disk_usage() only.
+    Table is populated immediately with "..." placeholders for model/fs/bus/sectors.
+    The selected drive is determined from app.location_dir.
+
+  SLOW (background daemon thread):
+    Per-drive: get_drive_model, get_filesystem, get_bus_type, get_sector_sizes.
+    The selected drive is fetched first so the info card fills in quickly.
+    Each result is pushed back to the main thread via after(0, ...).
+    A refresh_gen counter lets stale callbacks from cancelled refreshes be ignored.
 """
 from __future__ import annotations
 
@@ -11,6 +23,7 @@ import os
 import platform
 import shutil
 import string
+import threading
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, ttk
@@ -18,17 +31,16 @@ from typing import Callable, Optional
 
 
 # ---------------------------------------------------------------------------
-# Drive enumeration
+# Drive enumeration - fast (disk-usage only)
 # ---------------------------------------------------------------------------
 
-def _list_drives() -> list[dict]:
-    """Return list of dicts: path, total_gb, used_gb, free_gb, pct."""
+def _list_drives_fast() -> list[dict]:
+    """Return list of dicts with path + disk-usage data (no model/fs)."""
     drives: list[dict] = []
     system = platform.system()
-
     candidates: list[str] = []
+
     if system == "Windows":
-        # Enumerate by letter
         bitmask = 0
         try:
             import ctypes
@@ -42,7 +54,6 @@ def _list_drives() -> list[dict]:
         for vol in Path("/Volumes").iterdir():
             candidates.append(str(vol))
     else:
-        # Linux: read /proc/mounts
         try:
             with open("/proc/mounts") as f:
                 for line in f:
@@ -56,15 +67,20 @@ def _list_drives() -> list[dict]:
         try:
             usage = shutil.disk_usage(path)
             total_gb = usage.total / (1024 ** 3)
-            used_gb = usage.used / (1024 ** 3)
-            free_gb = usage.free / (1024 ** 3)
+            used_gb  = usage.used  / (1024 ** 3)
+            free_gb  = usage.free  / (1024 ** 3)
             pct = (usage.used / usage.total * 100) if usage.total else 0
             drives.append({
-                "path": path,
+                "path":     path,
                 "total_gb": total_gb,
-                "used_gb": used_gb,
-                "free_gb": free_gb,
-                "pct": pct,
+                "used_gb":  used_gb,
+                "free_gb":  free_gb,
+                "pct":      pct,
+                # slow fields filled by background thread
+                "model":      "...",
+                "filesystem": "...",
+                "bus_type":   "...",
+                "sectors":    "...",
             })
         except (PermissionError, OSError):
             pass
@@ -72,17 +88,27 @@ def _list_drives() -> list[dict]:
     return drives
 
 
-def _get_drive_model_for(path: str) -> str:
-    """Return drive model string for the given path (best-effort)."""
+def _fetch_slow_metadata(drive: dict) -> None:
+    """Populate slow metadata fields in-place for a single drive dict."""
+    path = drive["path"]
     try:
         from ..util import get_drive_model
-        return get_drive_model(path)
+        drive["model"] = get_drive_model(path) or path
     except Exception:
-        return "Unknown"
+        drive["model"] = path
+
+    try:
+        from ..util import get_filesystem, get_bus_type, get_sector_sizes
+        drive["filesystem"] = get_filesystem(path)
+        drive["bus_type"]   = get_bus_type(path)
+        drive["sectors"]    = get_sector_sizes(path)
+    except Exception:
+        drive.setdefault("filesystem", "-")
+        drive.setdefault("bus_type",   "-")
+        drive.setdefault("sectors",    "-")
 
 
 def _check_access(path: str) -> tuple[bool, bool]:
-    """Return (can_read, can_write) for path."""
     return os.access(path, os.R_OK), os.access(path, os.W_OK)
 
 
@@ -102,12 +128,16 @@ class DrivesPanel(ttk.Frame):
         super().__init__(parent, **kwargs)
         self._on_location_change = on_location_change
         self._selected_path: Optional[str] = None
+        self._drives: list[dict] = []
+        self._bg_thread: Optional[threading.Thread] = None
+        # Incremented on each refresh; lets after() callbacks detect staleness.
+        self._refresh_gen = 0
 
         self._build_ui()
         self.refresh()
 
     # ------------------------------------------------------------------
-    # UI
+    # UI construction
     # ------------------------------------------------------------------
 
     def _build_ui(self) -> None:
@@ -131,16 +161,15 @@ class DrivesPanel(ttk.Frame):
         info_frame.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 5))
         info_frame.configure(width=260)
 
-        self._model_label = ttk.Label(info_frame, text="Model: —", wraplength=250)
+        self._model_label     = ttk.Label(info_frame, text="Model: -", wraplength=250)
         self._model_label.pack(anchor="w", pady=1)
-        self._partition_label = ttk.Label(info_frame, text="Partition: —")
+        self._partition_label = ttk.Label(info_frame, text="Partition: -")
         self._partition_label.pack(anchor="w", pady=1)
-        self._access_label = ttk.Label(info_frame, text="Access: —")
+        self._access_label    = ttk.Label(info_frame, text="Access: -")
         self._access_label.pack(anchor="w", pady=1)
-        self._usage_label = ttk.Label(info_frame, text="Usage: —")
+        self._usage_label     = ttk.Label(info_frame, text="Usage: -")
         self._usage_label.pack(anchor="w", pady=1)
 
-        # Usage bar
         ttk.Separator(info_frame, orient="horizontal").pack(fill=tk.X, pady=5)
         self._usage_bar = ttk.Progressbar(
             info_frame, maximum=100, mode="determinate", length=240,
@@ -149,13 +178,12 @@ class DrivesPanel(ttk.Frame):
         self._usage_pct_label = ttk.Label(info_frame, text="")
         self._usage_pct_label.pack(anchor="w", pady=2)
 
-        # Extra info (filesystem / bus / sectors)
         ttk.Separator(info_frame, orient="horizontal").pack(fill=tk.X, pady=5)
-        self._fs_label = ttk.Label(info_frame, text="File System: —")
+        self._fs_label      = ttk.Label(info_frame, text="File System: -")
         self._fs_label.pack(anchor="w", pady=1)
-        self._bus_label = ttk.Label(info_frame, text="Interface: —")
+        self._bus_label     = ttk.Label(info_frame, text="Interface: -")
         self._bus_label.pack(anchor="w", pady=1)
-        self._sectors_label = ttk.Label(info_frame, text="Sector Size: —")
+        self._sectors_label = ttk.Label(info_frame, text="Sector Size: -")
         self._sectors_label.pack(anchor="w", pady=1)
 
         # All drives table
@@ -201,39 +229,24 @@ class DrivesPanel(ttk.Frame):
     # ------------------------------------------------------------------
 
     def refresh(self) -> None:
-        """Reload drive list and update UI."""
+        """Reload drive list.
+
+        Fast phase (shutil.disk_usage only) runs on the main thread in <5 ms.
+        Slow phase (model, filesystem, bus, sectors) runs in a background daemon
+        thread and patches each row/info-card via after(0,...) as results arrive.
+        The selected drive is processed first so the info card fills quickly.
+        """
         import pydiskmark.app as app
 
-        self._drives = _list_drives()
+        # Cancel any previous background refresh
+        self._refresh_gen += 1
+        gen = self._refresh_gen
 
-        # Fetch all drive models up-front (one system call per drive)
-        # and cache on the dict so the tree + combo share the same value.
-        for d in self._drives:
-            d["model"] = _get_drive_model_for(d["path"])
+        # ---- FAST: shutil.disk_usage only, runs immediately ----
+        self._drives = _list_drives_fast()
 
-        # Fetch extra info (slow-ish, cached on dict)
-        try:
-            from ..util import get_filesystem, get_bus_type, get_sector_sizes
-            for d in self._drives:
-                p = d["path"]
-                d.setdefault("filesystem", get_filesystem(p))
-                d.setdefault("bus_type",   get_bus_type(p))
-                d.setdefault("sectors",    get_sector_sizes(p))
-        except Exception:
-            for d in self._drives:
-                d.setdefault("filesystem", "—")
-                d.setdefault("bus_type",   "—")
-                d.setdefault("sectors",    "—")
+        self._update_combo_labels()
 
-        # Populate combo — "Model  —  C:\  —  3725 GB"
-        labels = []
-        for d in self._drives:
-            model = d["model"] or d["path"]
-            labels.append(f"{d['path']}  —  {model}  —  {d['total_gb']:.0f} GB")
-        self._drive_combo["values"] = labels
-
-
-        # Populate treeview
         for item in self._tree.get_children():
             self._tree.delete(item)
         for d in self._drives:
@@ -246,14 +259,77 @@ class DrivesPanel(ttk.Frame):
                 f"{d['pct']:.1f}%",
             ))
 
-
-        # Select the current app location
         loc = app.location_dir or str(Path.home())
         self._select_by_path(loc)
         self._dir_var.set(app.data_dir or str(Path(loc) / "pdm-data"))
 
+        # ---- SLOW: fetch per-drive metadata in background ----
+        selected_idx = self._selected_index()
+        ordered = (
+            ([self._drives[selected_idx]] if selected_idx >= 0 else []) +
+            [d for i, d in enumerate(self._drives) if i != selected_idx]
+        )
+        tree_iids = list(self._tree.get_children())
+
+        def _bg_worker() -> None:
+            for drive in ordered:
+                if self._refresh_gen != gen:
+                    return   # newer refresh started; abandon
+                _fetch_slow_metadata(drive)
+                self.after(0, self._patch_drive_row, drive, tree_iids, gen)
+
+        self._bg_thread = threading.Thread(target=_bg_worker, daemon=True)
+        self._bg_thread.start()
+
+    def _patch_drive_row(self, drive: dict, iids: list[str], gen: int) -> None:
+        """Called on the main thread (via after) to update one completed drive row."""
+        if self._refresh_gen != gen:
+            return   # stale
+        try:
+            idx = self._drives.index(drive)
+        except ValueError:
+            return
+
+        if idx < len(iids):
+            self._tree.item(iids[idx], values=(
+                drive["model"],
+                drive["path"],
+                f"{drive['total_gb']:.1f}",
+                f"{drive['used_gb']:.1f}",
+                f"{drive['free_gb']:.1f}",
+                f"{drive['pct']:.1f}%",
+            ))
+
+        self._update_combo_labels()
+
+        if drive["path"] == self._selected_path:
+            self._update_drive_info_card(drive)
+
+    def _update_combo_labels(self) -> None:
+        """Rebuild the combobox value list from current drive data."""
+        cur = self._drive_combo.current()
+        labels = [
+            f"{d['path']}  -  {d['model']}  -  {d['total_gb']:.0f} GB"
+            for d in self._drives
+        ]
+        self._drive_combo["values"] = labels
+        if cur >= 0:
+            self._drive_combo.current(cur)
+
+    def _selected_index(self) -> int:
+        if not self._selected_path:
+            return -1
+        for i, d in enumerate(self._drives):
+            if d["path"] == self._selected_path:
+                return i
+        return -1
+
+    # ------------------------------------------------------------------
+    # Drive selection helpers
+    # ------------------------------------------------------------------
+
     def _select_by_path(self, path: str) -> None:
-        """Highlight the drive row that best matches *path*."""
+        """Highlight the drive row that best matches path."""
         best_idx = 0
         best_len = 0
         for i, d in enumerate(self._drives):
@@ -263,43 +339,39 @@ class DrivesPanel(ttk.Frame):
                 best_len = len(dp)
 
         if self._drives:
-            self._update_drive_info(self._drives[best_idx])
+            self._update_drive_info_card(self._drives[best_idx])
             self._drive_combo.current(best_idx)
             children = self._tree.get_children()
             if children and best_idx < len(children):
                 self._tree.selection_set(children[best_idx])
 
-    def _update_drive_info(self, drive: dict) -> None:
-        """Update the left-side drive info card."""
+    def _update_drive_info_card(self, drive: dict) -> None:
+        """Update the left-side drive info card from a drive dict."""
         import pydiskmark.app as app
 
         self._selected_path = drive["path"]
-        model = drive.get("model") or _get_drive_model_for(drive["path"])
-
+        model = drive.get("model") or drive["path"]
         can_read, can_write = _check_access(drive["path"])
-
-        # Derive partition label
         path_str = drive["path"].rstrip("\\/")
-        partition = path_str.split(":")[-1].strip("\\/ ") or path_str
 
         self._model_label.config(text=f"Model: {model}")
         self._partition_label.config(text=f"Partition: {path_str}")
-        read_str = "Read ✓" if can_read else "Read ✗"
-        write_str = "Write ✓" if can_write else "Write ✗"
+        read_str  = "Read OK"  if can_read  else "Read X"
+        write_str = "Write OK" if can_write else "Write X"
         self._access_label.config(text=f"Access: {read_str}  {write_str}")
         self._usage_label.config(
-            text=f"Usage: {drive['pct']:.0f}%  {drive['used_gb']:.0f} / {drive['total_gb']:.0f} GB"
+            text=f"Usage: {drive['pct']:.0f}%  "
+                 f"{drive['used_gb']:.0f} / {drive['total_gb']:.0f} GB"
         )
 
         pct = min(100, max(0, drive["pct"]))
         self._usage_bar["value"] = pct
         self._usage_pct_label.config(text=f"{pct:.0f}%")
 
-        self._fs_label.config(text=f"File System: {drive.get('filesystem', '—')}")
-        self._bus_label.config(text=f"Interface: {drive.get('bus_type', '—')}")
-        self._sectors_label.config(text=f"Sector Size: {drive.get('sectors', '—')}")
+        self._fs_label.config(     text=f"File System: {drive.get('filesystem', '-')}")
+        self._bus_label.config(    text=f"Interface: {drive.get('bus_type', '-')}")
+        self._sectors_label.config(text=f"Sector Size: {drive.get('sectors', '-')}")
 
-        # Update app state
         app.set_location_dir(drive["path"])
         data_dir = str(Path(drive["path"]) / "pdm-data")
         self._dir_var.set(data_dir)
@@ -312,7 +384,7 @@ class DrivesPanel(ttk.Frame):
     def _on_combo_select(self, _event=None) -> None:
         idx = self._drive_combo.current()
         if 0 <= idx < len(self._drives):
-            self._update_drive_info(self._drives[idx])
+            self._update_drive_info_card(self._drives[idx])
             children = self._tree.get_children()
             if children and idx < len(children):
                 self._tree.selection_set(children[idx])
@@ -324,7 +396,7 @@ class DrivesPanel(ttk.Frame):
         children = list(self._tree.get_children())
         idx = children.index(sel[0])
         if 0 <= idx < len(self._drives):
-            self._update_drive_info(self._drives[idx])
+            self._update_drive_info_card(self._drives[idx])
             self._drive_combo.current(idx)
 
     def _browse(self) -> None:

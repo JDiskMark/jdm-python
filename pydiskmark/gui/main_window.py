@@ -213,44 +213,250 @@ class _VertTabPanel(ttk.Frame):
                 canvas.itemconfigure("lbl", fill=self._INACTIVE_FG)
 
 
+
+# ---------------------------------------------------------------------------
+# Splash screen
+# ---------------------------------------------------------------------------
+
+class _SplashScreen:
+    """Borderless branded splash shown while MainWindow builds off-screen.
+
+    Displayed as a Toplevel on the already-created (but withdrawn) root so
+    it inherits the Tk event loop without needing a second Tk() instance.
+    Destroyed by calling .close() once the main window is ready to show.
+
+    Pass win_x/win_y/win_w/win_h to centre the splash over the region where
+    the main window will appear.  If omitted, falls back to screen-centre.
+    """
+
+    _W = 340   # splash width  (px)
+    _H = 180   # splash height (px)
+
+    def __init__(
+        self,
+        root: tk.Tk,
+        is_dark_theme: bool,
+        *,
+        win_x: int = -1,
+        win_y: int = -1,
+        win_w: int = 0,
+        win_h: int = 0,
+    ) -> None:
+        self._top = tk.Toplevel(root)
+        self._top.overrideredirect(True)   # no title bar / chrome
+        self._top.resizable(False, False)
+
+        # ── Background colour matching the active theme ──
+        bg     = "#1c1c1c" if is_dark_theme else "#f0f0f0"
+        fg     = "#e0e0e0" if is_dark_theme else "#222222"
+        sub_fg = "#888888" if is_dark_theme else "#666666"
+        self._top.configure(bg=bg)
+
+        # ── Blue border frame ──
+        border = tk.Frame(self._top, bg="#005fb8", padx=2, pady=2)
+        border.pack(fill=tk.BOTH, expand=True)
+        inner = tk.Frame(border, bg=bg)
+        inner.pack(fill=tk.BOTH, expand=True, padx=1, pady=1)
+
+        # ── Turtle icon (skipped gracefully if PIL unavailable) ──
+        self._img_ref = None
+        icon_path = Path(__file__).parent / "turtle_icon.png"
+        try:
+            from PIL import Image, ImageTk
+            img = Image.open(str(icon_path)).resize((72, 72), Image.LANCZOS)
+            self._img_ref = ImageTk.PhotoImage(img)
+            tk.Label(inner, image=self._img_ref, bg=bg, bd=0).pack(pady=(18, 4))
+        except Exception:
+            tk.Label(inner, text="🐢", font=("", 36), bg=bg).pack(pady=(18, 4))
+
+        # ── App name ──
+        tk.Label(
+            inner, text=f"pydiskmark  {app.VERSION}",
+            font=("Segoe UI", 13, "bold"), bg=bg, fg=fg,
+        ).pack()
+
+        # ── Loading status ──
+        self._status_var = tk.StringVar(value="Loading…")
+        tk.Label(
+            inner, textvariable=self._status_var,
+            font=("Segoe UI", 9), bg=bg, fg=sub_fg,
+        ).pack(pady=(4, 16))
+
+        # ── Position: centre over the main window region if coords supplied,
+        #    otherwise fall back to screen centre ──
+        self._top.update_idletasks()
+        if win_x >= 0 and win_w > 0:
+            x = win_x + (win_w - self._W) // 2
+            y = win_y + (win_h - self._H) // 2
+        else:
+            sw = self._top.winfo_screenwidth()
+            sh = self._top.winfo_screenheight()
+            x = (sw - self._W) // 2
+            y = (sh - self._H) // 2
+        self._top.geometry(f"{self._W}x{self._H}+{x}+{y}")
+        self._top.lift()
+        self._top.update()
+
+    def set_status(self, text: str) -> None:
+        """Update the loading status label."""
+        self._status_var.set(text)
+        self._top.update_idletasks()
+
+    def close(self) -> None:
+        """Destroy the splash window."""
+        try:
+            self._top.destroy()
+        except Exception:
+            pass
+
+
 class MainWindow:
     """Main application window."""
 
     def __init__(self) -> None:
+        import time as _time
+
+        def _tick(label: str, t0: float, steps: list) -> float:
+            t1 = _time.perf_counter()
+            steps.append((label, t1 - t0))
+            return t1
+
+        _steps: list[tuple[str, float]] = []
+        _t = _time.perf_counter()
+        _total_start = _t
+
+        # ── Tk root: create and hide immediately ──────────────────────────────
         self._root = tk.Tk()
+        self._root.withdraw()
+        _t = _tick("tk.Tk() + withdraw()", _t, _steps)
 
-        # Window title includes arch + CPU (like jdm-java)
+        # Window title
         cpu = app.processor_name or "Unknown CPU"
-        self._root.title(
-            f"pydiskmark {app.VERSION}  —  {app.arch}  —  {cpu}"
-        )
-        self._root.geometry("1150x680")
+        self._root.title(f"pydiskmark {app.VERSION}  —  {app.arch}  —  {cpu}")
+
+        # Centre on screen (pre-compute position for splash alignment)
+        _WIN_W, _WIN_H = 1150, 680
+        self._root.update_idletasks()
+        _sw = self._root.winfo_screenwidth()
+        _sh = self._root.winfo_screenheight()
+        _win_x = (_sw - _WIN_W) // 2
+        _win_y = (_sh - _WIN_H) // 2
+        self._root.geometry(f"{_WIN_W}x{_WIN_H}+{_win_x}+{_win_y}")
         self._root.minsize(900, 500)
+        _t = _tick("window geometry / centre", _t, _steps)
 
+        # ── Apply persisted theme BEFORE building any widgets ─────────────────
+        import pydiskmark.app as _app
+        saved = getattr(_app, "_saved_theme", "dark")
+        is_dark = (saved != "light")
+        if is_dark:
+            theme.apply_dark_theme()
+        else:
+            theme.apply_light_theme()
+        _t = _tick(f"apply_{'dark' if is_dark else 'light'}_theme()", _t, _steps)
 
-        # Apply dark theme
-        theme.apply_dark_theme()
+        # ── Splash screen ─────────────────────────────────────────────────────
+        splash = _SplashScreen(self._root, is_dark,
+                               win_x=_win_x, win_y=_win_y,
+                               win_w=_WIN_W, win_h=_WIN_H)
+        _t = _tick("splash screen render", _t, _steps)
 
-        # Listener and run state
+        # ── Listener / run state ──────────────────────────────────────────────
         self._listener = GuiListener()
         self._benchmark = None
         self._worker_thread: Optional[threading.Thread] = None
         self._target_tx_kb: int = 0
 
-        # Build UI — bottom items must be packed before main content
-        # so pack(side=BOTTOM) anchors correctly
+        # ── Menu bar ──────────────────────────────────────────────────────────
+        splash.set_status("Building menu…")
         self._build_menu()
-        self._build_bottom_bar()      # creates _status_label — must come first
-        self._build_bottom_tabs()     # packs above bottom bar
-        self._build_main_content()    # DrivesPanel.refresh() fires here — _status_label already exists
+        _t = _tick("_build_menu()", _t, _steps)
 
-        # Keyboard shortcuts
+        # ── Bottom status bar ─────────────────────────────────────────────────
+        splash.set_status("Building status bar…")
+        self._build_bottom_bar()
+        _t = _tick("_build_bottom_bar()", _t, _steps)
+
+        # ── Bottom history tabs ───────────────────────────────────────────────
+        splash.set_status("Building history tabs…")
+        self._build_bottom_tabs()
+        _t = _tick("_build_bottom_tabs()", _t, _steps)
+
+        # ── Left tab panel + ControlPanel ─────────────────────────────────────
+        splash.set_status("Building control panel…")
+        content = ttk.Frame(self._root)
+        content.pack(fill=tk.BOTH, expand=True)
+        self._left_nb = _VertTabPanel(content)
+        self._left_nb.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        drives_page = self._left_nb.make_page()
+        bench_page  = self._left_nb.make_page()
+        ctrl_frame = ttk.Frame(bench_page, width=280)
+        ctrl_frame.pack(side=tk.LEFT, fill=tk.Y)
+        ctrl_frame.pack_propagate(False)
+        self._controls = ControlPanel(
+            ctrl_frame,
+            on_start=self._start_benchmark,
+            on_stop=self._stop_benchmark,
+        )
+        self._controls.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        _t = _tick("_VertTabPanel + ControlPanel", _t, _steps)
+
+        # ── Chart (matplotlib — usually the slowest widget) ───────────────────
+        splash.set_status("Initialising matplotlib chart…")
+        ttk.Separator(bench_page, orient="vertical").pack(side=tk.LEFT, fill=tk.Y)
+        chart_frame = ttk.Frame(bench_page)
+        chart_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self._chart = ChartPanel(chart_frame)
+        self._chart.pack(fill=tk.BOTH, expand=True)
+        _t = _tick("ChartPanel (matplotlib)", _t, _steps)
+
+        # ── DrivesPanel + tab registration ────────────────────────────────────
+        splash.set_status("Loading drive info…")
+        self._drives_panel = DrivesPanel(
+            drives_page, on_location_change=self._on_location_change,
+        )
+        self._drives_panel.pack(fill=tk.BOTH, expand=True)
+        self._left_nb.add(drives_page, text="Drives")
+        self._left_nb.add(bench_page,  text="Benchmark")
+        self._left_nb.select(1)
+        _t = _tick("DrivesPanel + tab registration", _t, _steps)
+
+        # ── Keyboard shortcuts + protocol ─────────────────────────────────────
         self._root.bind("<Control-r>", lambda _: self._start_benchmark())
-        self._root.bind("<Escape>", lambda _: self._stop_benchmark())
+        self._root.bind("<Escape>",    lambda _: self._stop_benchmark())
         self._root.bind("<Control-l>", lambda _: self._reset_chart())
-
         self._root.protocol("WM_DELETE_WINDOW", self._on_close)
         self._refresh_status()
+        _t = _tick("bindings + refresh_status()", _t, _steps)
+
+        # ── Final layout pass ─────────────────────────────────────────────────
+        splash.set_status("Laying out widgets…")
+        self._root.update_idletasks()
+        _t = _tick("update_idletasks()", _t, _steps)
+
+        # ── Retheme to guarantee chart colours match after layout settled ──────
+        splash.set_status("Applying theme…")
+        self._chart.retheme()
+        self._left_nb.retheme()
+        _t = _tick("retheme() chart + tabs", _t, _steps)
+
+        # ── Reveal ────────────────────────────────────────────────────────────
+        splash.set_status("Ready")
+        splash.close()
+        self._root.deiconify()
+        _t = _tick("splash.close() + deiconify()", _t, _steps)
+
+        # ── Print startup timing breakdown ────────────────────────────────────
+        total_ms = (_t - _total_start) * 1000
+        print(f"\n{'─' * 52}")
+        print(f"  pydiskmark startup timing")
+        print(f"{'─' * 52}")
+        for label, elapsed in _steps:
+            bar = "█" * max(1, int(elapsed * 1000 / 10))   # 1 block per 10 ms
+            print(f"  {label:<38}  {elapsed * 1000:6.1f} ms  {bar}")
+        print(f"{'─' * 52}")
+        print(f"  {'TOTAL':<38}  {total_ms:6.1f} ms")
+        print(f"{'─' * 52}\n")
 
 
     # ------------------------------------------------------------------
@@ -756,6 +962,9 @@ class MainWindow:
         theme.toggle_theme()
         self._chart.retheme()
         self._left_nb.retheme()
+        # Persist the new theme choice immediately
+        from pydiskmark import config
+        config.save_config()
 
     # ------------------------------------------------------------------
     # Action menu handlers

@@ -41,6 +41,9 @@ class ChartPanel(tk.Frame):
         self._r_avg: list[float] = []
         self._r_lat: list[float] = []
 
+        # Stored title text so it survives _redraw_all()
+        self._title_text: str = ""
+
         # Create figure and axes
         self._fig = Figure(figsize=(7, 4), dpi=100)
         self._ax_bw = self._fig.add_subplot(111)
@@ -61,8 +64,20 @@ class ChartPanel(tk.Frame):
 
     def set_title(self, title: str) -> None:
         """Update the chart title (shown above the plot area)."""
-        self._fig.suptitle(title, fontsize=9, color=theme.get_chart_style()["text"])
+        self._title_text = title
+        self._apply_title()
         self._canvas.draw_idle()
+
+    def _apply_title(self) -> None:
+        """(Re-)render the stored title with the correct theme colour."""
+        if self._title_text:
+            self._fig.suptitle(
+                self._title_text,
+                fontsize=12,
+                fontweight="bold",
+                color=theme.get_chart_style()["text"],
+                y=0.97,          # sits just above the axes top (0.93)
+            )
 
     # ------------------------------------------------------------------
     # Styling
@@ -77,14 +92,16 @@ class ChartPanel(tk.Frame):
 
         # Left axis — Bandwidth
         self._ax_bw.set_ylabel("Bandwidth (MB/s)", color=style["text"], fontsize=10)
-        self._ax_bw.set_xlabel("Sample", color=style["text"], fontsize=10)
+        self._ax_bw.set_xlabel("", color=style["text"], fontsize=10)
         self._ax_bw.tick_params(colors=style["text"], labelsize=8)
         self._ax_bw.grid(True, color=style["grid"], alpha=0.3, linestyle="--")
 
         # Right axis — Latency
         if self._ax_lat is None:
             self._ax_lat = self._ax_bw.twinx()
-        self._ax_lat.set_ylabel("Latency (ms)", color=style["text"], fontsize=10)
+        self._ax_lat.set_ylabel("Latency (ms)", color=style["text"], fontsize=10,
+                                rotation=270, labelpad=12)
+        self._ax_lat.yaxis.set_label_position("right")
         self._ax_lat.tick_params(colors=style["text"], labelsize=8)
 
         # Spine colors
@@ -93,11 +110,14 @@ class ChartPanel(tk.Frame):
         for spine in self._ax_lat.spines.values():
             spine.set_color(style["grid"])
 
-        self._fig.tight_layout(pad=1.5)
+        # Fixed margins — never shift regardless of data or title presence.
+        # top=0.93 reserves space for the suptitle at y=0.97.
+        self._fig.subplots_adjust(left=0.08, right=0.91, top=0.93, bottom=0.07)
 
     def retheme(self) -> None:
         """Re-apply style after a theme toggle, then redraw everything."""
         self._apply_style()
+        self._apply_title()
         self._redraw_all()
 
     # ------------------------------------------------------------------
@@ -160,13 +180,16 @@ class ChartPanel(tk.Frame):
 
         # Re-apply axis labels and style after clear
         self._ax_bw.set_ylabel("Bandwidth (MB/s)", color=style["text"], fontsize=10)
-        self._ax_bw.set_xlabel("Sample", color=style["text"], fontsize=10)
+        self._ax_bw.set_xlabel("", color=style["text"], fontsize=10)
         self._ax_bw.tick_params(colors=style["text"], labelsize=8)
         self._ax_bw.grid(True, color=style["grid"], alpha=0.3, linestyle="--")
         self._ax_bw.set_facecolor(style["plot_bg"])
 
-        self._ax_lat.set_ylabel("Latency (ms)", color=style["text"], fontsize=10)
+        self._ax_lat.set_ylabel("Latency (ms)", color=style["text"], fontsize=10,
+                                rotation=270, labelpad=12)
+        self._ax_lat.yaxis.set_label_position("right")
         self._ax_lat.tick_params(colors=style["text"], labelsize=8)
+
 
         # Sort each series by sample number so concurrent-thread samples
         # are rendered in x-order. Data is kept sorted at insertion time
@@ -221,6 +244,7 @@ class ChartPanel(tk.Frame):
                 labelcolor=style["text"], framealpha=0.8,
             )
 
-        self._fig.tight_layout(pad=1.5)
+        # Re-apply title after axes clear (cla() wipes the suptitle)
+        self._apply_title()
         self._canvas.draw_idle()
 

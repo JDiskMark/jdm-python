@@ -888,7 +888,7 @@ Additional runtime dependencies: `matplotlib>=3.7`, `sv-ttk>=2.5`.
 │ e │  Benchmark tab selected:                                   │
 │ s │  ┌──────────────┬──────────────────────────────────────┐  │
 │   │  │ ControlPanel │          ChartPanel                  │  │
-│ B │  │ (340 px)     │  (matplotlib dual-axis, fills rest)  │  │
+│ B │  │ (320 px)     │  (matplotlib dual-axis, fills rest)  │  │
 │ e │  │ settings /   │                                      │  │
 │ n │  │ start/stop / │                                      │  │
 │ c │  │ metrics grid │                                      │  │
@@ -1032,6 +1032,72 @@ chart without re-running I/O.
 - About dialog centred on the parent window (`transient + grab_set`)
 - Window title: `pydiskmark <version> — <arch> — <CPU>`
 - Chart suptitle: `<drive model> — <partition>: <pct>% (<used>/<total> GB)`
+
+### 20.12 Benchmark Tab — Control Panel Grid Layout
+
+The `ControlPanel` widget uses a **3-column Tkinter grid** that replicates
+jdiskmark's Swing layout. The container frame has a fixed `width=320` px
+(`pack_propagate(False)`).
+
+#### Column definitions
+
+| Col | Role | Weight | Effect |
+|-----|------|--------|--------|
+| 0 | Narrow label anchor (Profile / Type rows only) | 0 (fixed) | `minsize=60 px` — holds the short "Profile" / "Type" label text |
+| 1 | Middle — label overflow + combo left-edge | 2 | Receives ~40 % of the expandable space |
+| 2 | Combo-only column (rows 3–7) | 3 | Receives ~60 % of the expandable space |
+
+Columns 1 and 2 together fill all space beyond col 0's 60 px minimum.
+The 2 : 3 weight ratio produces a 40 % : 60 % split, matching jdiskmark.
+
+#### Row spanning rules
+
+```
+Row │ Widget          │ Col span (label) │ Col span (combo)
+────┼─────────────────┼──────────────────┼──────────────────
+ 0  │ Profile         │ col 0 only       │ cols 1+2, sticky="ew"
+ 1  │ Type            │ col 0 only       │ cols 1+2, sticky="ew"
+ 2  │ Threads         │ cols 0+1         │ col 2 only, sticky="ew"
+ 3  │ Block Order     │ cols 0+1         │ col 2 only, sticky="ew"
+ 4  │ Blocks / Sample │ cols 0+1         │ col 2 only, sticky="ew"
+ 5  │ Block Size (KB) │ cols 0+1         │ col 2 only, sticky="ew"
+ 6  │ Samples         │ cols 0+1         │ col 2 only, sticky="ew"
+ 7  │ Start button    │ cols 0+1+2 (columnspan=3), sticky="ew"
+ 8  │ Separator       │ cols 0+1+2 (columnspan=3), sticky="ew"
+ 9  │ Results frame   │ cols 0+1+2 (columnspan=3), sticky="ew"
+```
+
+#### Visual result
+
+```
+ Col 0 (≥60 px) │  Col 1 (40 %)  │  Col 2 (60 %)  │
+────────────────┼────────────────────────────────────┤
+ Profile        │  [Profile combo ── spans 1+2 ──]  ▼│
+ Type           │  [Type combo ──── spans 1+2 ──]  ▼│
+ [Threads ─── spans 0+1 ──────]  │  [  1  ]       ▼│
+ [Block Order ─ spans 0+1 ──]    │  [Sequential]  ▼│
+ [Blocks / Sample ─ spans 0+1]   │  [   512  ]    ▼│
+ [Block Size (KB) ─ spans 0+1]   │  [   512  ]    ▼│
+ [Samples ─── spans 0+1 ──────]  │  [   250  ]    ▼│
+ [────────────── Start ──────────────────────────]  │
+```
+
+#### Key rules
+
+- **No `width=` hint on combos.** All combos use `sticky="ew"` to fill their
+  column. Hardcoded `width=` values fight with Tkinter's grid geometry and
+  should not be set.
+- **`pack_propagate(False)`** on `ctrl_frame` is essential. Without it the
+  frame would shrink to the minimum size of its children.
+- **40 : 60 split** ensures the shorter numeric combos (Threads, Samples, …)
+  are proportionally narrower than the Profile / Type combos, matching jdiskmark.
+- **Column 0 `weight=0`** prevents the label anchor from expanding; all
+  growth goes to cols 1 and 2 in a 2 : 3 ratio.
+
+#### Relevant source
+
+- [`control_panel.py`](pydiskmark/gui/control_panel.py) — `_build_ui()` method
+- [`main_window.py`](pydiskmark/gui/main_window.py) — `ctrl_frame = ttk.Frame(bench_page, width=320)`
 
 ---
 

@@ -73,3 +73,22 @@ def get_jvm_info() -> str:
     """Return Python runtime version string (replaces Java's getJvmInfo())."""
     import sys
     return f"Python {sys.version.split()[0]}"
+
+
+def get_filesystem(path) -> str:
+    """Return the volume filesystem type (e.g. 'NTFS')."""
+    from .util_os import get_filesystem as _impl
+    return _impl(path)
+
+
+def get_bus_type(path) -> str:
+    """Return the drive interface bus type (e.g. 'NVMe', 'SATA')."""
+    from .util_os import get_bus_type as _impl
+    return _impl(path)
+
+
+def get_sector_sizes(path) -> str:
+    """Return logical/physical sector sizes (e.g. '512 B / 4096 B')."""
+    from .util_os import get_sector_sizes as _impl
+    return _impl(path)
+

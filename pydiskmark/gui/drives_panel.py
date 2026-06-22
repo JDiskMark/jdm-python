@@ -129,46 +129,57 @@ class DrivesPanel(ttk.Frame):
         # Drive info card
         info_frame = ttk.LabelFrame(middle, text="Drive Info", padding=8)
         info_frame.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 5))
-        info_frame.configure(width=200)
+        info_frame.configure(width=260)
 
-        self._model_label = ttk.Label(info_frame, text="Model: —", wraplength=190)
+        self._model_label = ttk.Label(info_frame, text="Model: —", wraplength=250)
         self._model_label.pack(anchor="w", pady=1)
         self._partition_label = ttk.Label(info_frame, text="Partition: —")
         self._partition_label.pack(anchor="w", pady=1)
-        self._usage_label = ttk.Label(info_frame, text="Usage: —")
-        self._usage_label.pack(anchor="w", pady=1)
         self._access_label = ttk.Label(info_frame, text="Access: —")
         self._access_label.pack(anchor="w", pady=1)
+        self._usage_label = ttk.Label(info_frame, text="Usage: —")
+        self._usage_label.pack(anchor="w", pady=1)
 
         # Usage bar
         ttk.Separator(info_frame, orient="horizontal").pack(fill=tk.X, pady=5)
         self._usage_bar = ttk.Progressbar(
-            info_frame, maximum=100, mode="determinate", length=180,
+            info_frame, maximum=100, mode="determinate", length=240,
         )
         self._usage_bar.pack(anchor="w")
         self._usage_pct_label = ttk.Label(info_frame, text="")
         self._usage_pct_label.pack(anchor="w", pady=2)
 
+        # Extra info (filesystem / bus / sectors)
+        ttk.Separator(info_frame, orient="horizontal").pack(fill=tk.X, pady=5)
+        self._fs_label = ttk.Label(info_frame, text="File System: —")
+        self._fs_label.pack(anchor="w", pady=1)
+        self._bus_label = ttk.Label(info_frame, text="Interface: —")
+        self._bus_label.pack(anchor="w", pady=1)
+        self._sectors_label = ttk.Label(info_frame, text="Sector Size: —")
+        self._sectors_label.pack(anchor="w", pady=1)
+
         # All drives table
         table_frame = ttk.LabelFrame(middle, text="All Drives", padding=5)
         table_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-        cols = ("drive", "total", "used", "free", "pct")
+        cols = ("model", "drive", "total", "used", "free", "pct")
         self._tree = ttk.Treeview(
             table_frame, columns=cols, show="headings",
             selectmode="browse", height=8,
         )
+        self._tree.heading("model", text="Model")
         self._tree.heading("drive", text="Drive / Mount")
         self._tree.heading("total", text="Total (GB)")
-        self._tree.heading("used", text="Used (GB)")
-        self._tree.heading("free", text="Free (GB)")
-        self._tree.heading("pct", text="Usage %")
+        self._tree.heading("used",  text="Used (GB)")
+        self._tree.heading("free",  text="Free (GB)")
+        self._tree.heading("pct",   text="Usage %")
 
-        self._tree.column("drive", width=100, anchor="w")
-        self._tree.column("total", width=85, anchor="e")
-        self._tree.column("used", width=85, anchor="e")
-        self._tree.column("free", width=85, anchor="e")
-        self._tree.column("pct", width=65, anchor="e")
+        self._tree.column("model", width=180, anchor="w")
+        self._tree.column("drive", width=70,  anchor="w")
+        self._tree.column("total", width=75,  anchor="e")
+        self._tree.column("used",  width=70,  anchor="e")
+        self._tree.column("free",  width=70,  anchor="e")
+        self._tree.column("pct",   width=58,  anchor="e")
 
         scrollbar = ttk.Scrollbar(table_frame, orient="vertical", command=self._tree.yview)
         self._tree.configure(yscrollcommand=scrollbar.set)
@@ -195,24 +206,46 @@ class DrivesPanel(ttk.Frame):
 
         self._drives = _list_drives()
 
-        # Populate combo
+        # Fetch all drive models up-front (one system call per drive)
+        # and cache on the dict so the tree + combo share the same value.
+        for d in self._drives:
+            d["model"] = _get_drive_model_for(d["path"])
+
+        # Fetch extra info (slow-ish, cached on dict)
+        try:
+            from ..util import get_filesystem, get_bus_type, get_sector_sizes
+            for d in self._drives:
+                p = d["path"]
+                d.setdefault("filesystem", get_filesystem(p))
+                d.setdefault("bus_type",   get_bus_type(p))
+                d.setdefault("sectors",    get_sector_sizes(p))
+        except Exception:
+            for d in self._drives:
+                d.setdefault("filesystem", "—")
+                d.setdefault("bus_type",   "—")
+                d.setdefault("sectors",    "—")
+
+        # Populate combo — "Model  —  C:\  —  3725 GB"
         labels = []
         for d in self._drives:
-            gb = d["total_gb"]
-            labels.append(f"{d['path']}  —  {gb:.0f} GB")
+            model = d["model"] or d["path"]
+            labels.append(f"{d['path']}  —  {model}  —  {d['total_gb']:.0f} GB")
         self._drive_combo["values"] = labels
+
 
         # Populate treeview
         for item in self._tree.get_children():
             self._tree.delete(item)
         for d in self._drives:
             self._tree.insert("", tk.END, values=(
+                d["model"],
                 d["path"],
                 f"{d['total_gb']:.1f}",
                 f"{d['used_gb']:.1f}",
                 f"{d['free_gb']:.1f}",
                 f"{d['pct']:.1f}%",
             ))
+
 
         # Select the current app location
         loc = app.location_dir or str(Path.home())
@@ -241,7 +274,8 @@ class DrivesPanel(ttk.Frame):
         import pydiskmark.app as app
 
         self._selected_path = drive["path"]
-        model = _get_drive_model_for(drive["path"])
+        model = drive.get("model") or _get_drive_model_for(drive["path"])
+
         can_read, can_write = _check_access(drive["path"])
 
         # Derive partition label
@@ -250,17 +284,20 @@ class DrivesPanel(ttk.Frame):
 
         self._model_label.config(text=f"Model: {model}")
         self._partition_label.config(text=f"Partition: {path_str}")
+        read_str = "Read ✓" if can_read else "Read ✗"
+        write_str = "Write ✓" if can_write else "Write ✗"
+        self._access_label.config(text=f"Access: {read_str}  {write_str}")
         self._usage_label.config(
             text=f"Usage: {drive['pct']:.0f}%  {drive['used_gb']:.0f} / {drive['total_gb']:.0f} GB"
         )
 
-        read_str = "Read ✓" if can_read else "Read ✗"
-        write_str = "Write ✓" if can_write else "Write ✗"
-        self._access_label.config(text=f"Access: {read_str}  {write_str}")
-
         pct = min(100, max(0, drive["pct"]))
         self._usage_bar["value"] = pct
         self._usage_pct_label.config(text=f"{pct:.0f}%")
+
+        self._fs_label.config(text=f"File System: {drive.get('filesystem', '—')}")
+        self._bus_label.config(text=f"Interface: {drive.get('bus_type', '—')}")
+        self._sectors_label.config(text=f"Sector Size: {drive.get('sectors', '—')}")
 
         # Update app state
         app.set_location_dir(drive["path"])

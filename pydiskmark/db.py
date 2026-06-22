@@ -238,6 +238,56 @@ def load_benchmark(benchmark_id: str) -> Optional[dict]:
 
 
 # ---------------------------------------------------------------------------
+# Delete
+# ---------------------------------------------------------------------------
+
+def delete_benchmark(benchmark_id: str) -> None:
+    """Delete a benchmark and all its operations by benchmark UUID.
+
+    ON DELETE CASCADE on benchmark_ops ensures op rows are removed too.
+    Also removes per-operation sample JSON files from disk.
+    """
+    try:
+        # Collect op file paths before deleting rows
+        with _connect() as conn:
+            rows = conn.execute(
+                "SELECT data_file FROM benchmark_ops WHERE benchmark_id = ?",
+                (benchmark_id,),
+            ).fetchall()
+            op_files = [_db_dir() / r["data_file"] for r in rows]
+            conn.execute("DELETE FROM benchmarks WHERE id = ?", (benchmark_id,))
+
+        # Remove sample data files (best-effort)
+        for f in op_files:
+            try:
+                f.unlink(missing_ok=True)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
+def delete_all_benchmarks() -> None:
+    """Delete every benchmark and all associated operations."""
+    try:
+        with _connect() as conn:
+            # Collect all op file paths
+            rows = conn.execute(
+                "SELECT data_file FROM benchmark_ops"
+            ).fetchall()
+            op_files = [_db_dir() / r["data_file"] for r in rows]
+            conn.execute("DELETE FROM benchmarks")
+
+        for f in op_files:
+            try:
+                f.unlink(missing_ok=True)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
+# ---------------------------------------------------------------------------
 # Load operation list for chart replay
 # ---------------------------------------------------------------------------
 

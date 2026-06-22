@@ -12,22 +12,34 @@ from tkinter import ttk
 from typing import Callable, Optional
 
 
+def _profile_display(symbol: Optional[str], BenchmarkProfile) -> str:
+    """Convert a stored profile symbol to its friendly display name."""
+    if not symbol:
+        return "—"
+    try:
+        return BenchmarkProfile.from_symbol(symbol).display_name
+    except (ValueError, AttributeError):
+        return symbol or "—"
+
+
+
+
 class HistoryPanel(ttk.Frame):
     """Treeview listing past benchmark operations with load-on-click."""
 
     COLUMNS = (
         # (id,          heading,        width, anchor)
         ("drive",    "Drive Model",   180,  "w"),
-        ("profile",  "Profile",        80,  "w"),
+        ("profile",  "Profile",       110,  "w"),
         ("type",     "Type",           58,  "center"),
-        ("order",    "Order",          85,  "w"),
+        ("order",    "Order",          65,  "w"),
         ("samples",  "Samples",        65,  "center"),
         ("blocks",   "Blocks (Size)",  90,  "e"),
-        ("threads",  "Thread",         55,  "center"),
-        ("start",    "Start Time",    140,  "w"),
-        ("elapsed",  "Time (ms)",      75,  "center"),
-        ("lat",      "Lat (ms)",       70,  "center"),
-        ("iops",     "IOPS",           65,  "center"),
+        ("threads",  "Thread",         42,  "center"),
+        ("start",    "Start Time",    140,  "center"),
+        ("elapsed",  "Time (ms)",      58,  "center"),
+        ("lat",      "Lat (ms)",       55,  "center"),
+        ("iops",     "IOPS",           52,  "center"),
         ("bw",       "BW (MB/s)",      80,  "center"),
     )
 
@@ -97,6 +109,7 @@ class HistoryPanel(ttk.Frame):
         """Reload history from the DB."""
         try:
             from .. import db
+            from ..benchmark_profile import BenchmarkProfile
             rows = db.load_history()
         except Exception:
             rows = []
@@ -120,7 +133,7 @@ class HistoryPanel(ttk.Frame):
 
                 self._tree.insert("", tk.END, values=(
                     r["drive_model"] or "—",
-                    r["profile"] or "—",
+                    _profile_display(r["profile"], BenchmarkProfile),
                     r["io_mode"] or r.get("benchmark_type", "—"),
                     r["block_order"] or "—",
                     r["num_samples"],
@@ -135,6 +148,22 @@ class HistoryPanel(ttk.Frame):
                 self._benchmark_ids.append(r.get("benchmark_id", ""))
         finally:
             self._refreshing = False
+
+    # ------------------------------------------------------------------
+    # Public accessors
+    # ------------------------------------------------------------------
+
+    def get_selected_benchmark_id(self) -> Optional[str]:
+        """Return the benchmark_id (UUID) of the currently selected row, or None."""
+        sel = self._tree.selection()
+        if not sel:
+            return None
+        children = list(self._tree.get_children())
+        try:
+            idx = children.index(sel[0])
+            return self._benchmark_ids[idx] or None
+        except (ValueError, IndexError):
+            return None
 
     # ------------------------------------------------------------------
     # Events

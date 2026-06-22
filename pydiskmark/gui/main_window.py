@@ -87,11 +87,13 @@ class _VertTabPanel(ttk.Frame):
     _TAB_PAD    = 20           # vertical padding above/below text
     _FONT       = ("Segoe UI", 9)
 
-    # Dark-mode defaults; updated in retheme()
-    _ACTIVE_BG  = "#005fb8"
+    # Colour sets — retheme() picks the right set at runtime
+    _ACTIVE_BG  = "#005fb8"   # blue — same in both themes
+    _ACTIVE_FG  = "#ffffff"
+
+    # Dark defaults (overwritten by retheme when switching to light)
     _INACTIVE_BG = "#1c1c1c"
     _HOVER_BG   = "#2b2b2b"
-    _ACTIVE_FG  = "#ffffff"
     _INACTIVE_FG = "#909090"
 
     def __init__(self, parent: tk.Widget, **kwargs) -> None:
@@ -185,9 +187,30 @@ class _VertTabPanel(ttk.Frame):
 
     def retheme(self) -> None:
         """Refresh tab colours after a dark/light theme toggle."""
-        # Re-select to repaint all buttons with current colour vars
+        from . import theme as _theme
+        if _theme.is_dark():
+            _VertTabPanel._INACTIVE_BG = "#1c1c1c"
+            _VertTabPanel._HOVER_BG   = "#2b2b2b"
+            _VertTabPanel._INACTIVE_FG = "#909090"
+        else:
+            _VertTabPanel._INACTIVE_BG = "#ffffff"
+            _VertTabPanel._HOVER_BG   = "#e8e8e8"
+            _VertTabPanel._INACTIVE_FG = "#333333"
+
+        # Update strip frame background
+        self._strip_frame.configure(bg=self._INACTIVE_BG)
+
+        # Re-select to repaint all buttons with the updated colour vars
         if self._active_idx >= 0:
             self.select(self._active_idx)
+        else:
+            # No tab selected yet — repaint all as inactive
+            for canvas, _ in self._tabs:
+                canvas.configure(
+                    bg=self._INACTIVE_BG,
+                    highlightbackground=self._INACTIVE_BG,
+                )
+                canvas.itemconfigure("lbl", fill=self._INACTIVE_FG)
 
 
 class MainWindow:
@@ -201,8 +224,9 @@ class MainWindow:
         self._root.title(
             f"pydiskmark {app.VERSION}  —  {app.arch}  —  {cpu}"
         )
-        self._root.geometry("1024x680")
-        self._root.minsize(800, 500)
+        self._root.geometry("1150x680")
+        self._root.minsize(900, 500)
+
 
         # Apply dark theme
         theme.apply_dark_theme()
@@ -223,7 +247,7 @@ class MainWindow:
         # Keyboard shortcuts
         self._root.bind("<Control-r>", lambda _: self._start_benchmark())
         self._root.bind("<Escape>", lambda _: self._stop_benchmark())
-        self._root.bind("<Control-l>", lambda _: self._clear_chart())
+        self._root.bind("<Control-l>", lambda _: self._reset_chart())
 
         self._root.protocol("WM_DELETE_WINDOW", self._on_close)
         self._refresh_status()
@@ -236,23 +260,50 @@ class MainWindow:
     def _build_menu(self) -> None:
         menubar = tk.Menu(self._root)
 
+        # ── File ──────────────────────────────────────────────────────────
         file_menu = tk.Menu(menubar, tearoff=0)
         file_menu.add_command(label="Export...\tCtrl+E", command=self._export_dialog)
         file_menu.add_separator()
         file_menu.add_command(label="Exit", command=self._on_close)
         menubar.add_cascade(label="File", menu=file_menu)
 
+        # ── Action ────────────────────────────────────────────────────────
         action_menu = tk.Menu(menubar, tearoff=0)
         action_menu.add_command(label="Start\tCtrl+R", command=self._start_benchmark)
-        action_menu.add_command(label="Stop\tEsc", command=self._stop_benchmark)
+        action_menu.add_command(label="Stop\tEsc",    command=self._stop_benchmark)
         action_menu.add_separator()
-        action_menu.add_command(label="Clear Chart\tCtrl+L", command=self._clear_chart)
+        action_menu.add_command(label="Reset Chart\tCtrl+L", command=self._reset_chart)
+        action_menu.add_separator()
+        action_menu.add_command(label="Clear Event Logs",        command=self._clear_event_logs)
+        action_menu.add_command(label="Delete Data Directory",   command=self._delete_data_dir)
+        action_menu.add_command(label="Delete Selected Benchmark", command=self._delete_selected_benchmark)
+        action_menu.add_command(label="Delete All Benchmarks",   command=self._delete_all_benchmarks)
         menubar.add_cascade(label="Action", menu=action_menu)
 
+        # ── Options ───────────────────────────────────────────────────────
         options_menu = tk.Menu(menubar, tearoff=0)
-        options_menu.add_command(label="Toggle Theme", command=self._toggle_theme)
+
+        # Instant-apply boolean flags
+        self._auto_remove_var = tk.BooleanVar(value=app.auto_remove_data)
+        self._auto_reset_var  = tk.BooleanVar(value=app.auto_reset)
+
+        options_menu.add_checkbutton(
+            label="Auto Remove Data Dir",
+            variable=self._auto_remove_var,
+            command=lambda: setattr(app, "auto_remove_data", self._auto_remove_var.get()),
+        )
+        options_menu.add_checkbutton(
+            label="Auto Reset",
+            variable=self._auto_reset_var,
+            command=lambda: setattr(app, "auto_reset", self._auto_reset_var.get()),
+        )
+        options_menu.add_separator()
+        options_menu.add_command(label="Toggle Theme",      command=self._toggle_theme)
+        options_menu.add_separator()
+        options_menu.add_command(label="Advanced Options…", command=self._show_advanced_options)
         menubar.add_cascade(label="Options", menu=options_menu)
 
+        # ── Help ──────────────────────────────────────────────────────────
         help_menu = tk.Menu(menubar, tearoff=0)
         help_menu.add_command(label="About", command=self._show_about)
         menubar.add_cascade(label="Help", menu=help_menu)
@@ -280,7 +331,7 @@ class MainWindow:
         bench_page = self._left_nb.make_page()
 
         # Left: settings controls (fixed width)
-        ctrl_frame = ttk.Frame(bench_page, width=340)
+        ctrl_frame = ttk.Frame(bench_page, width=280)
         ctrl_frame.pack(side=tk.LEFT, fill=tk.Y)
         ctrl_frame.pack_propagate(False)
         self._controls = ControlPanel(
@@ -446,11 +497,11 @@ class MainWindow:
         self._listener.cancel()
         self._status_label.config(text="Cancelling…")
 
-    def _clear_chart(self) -> None:
-        """Clear all chart data and reset the metrics display."""
+    def _reset_chart(self) -> None:
+        """Reset chart data and metrics display."""
         self._chart.clear()
         self._controls.reset_metrics()
-        self._log_event("Chart cleared")
+        self._log_event("Chart reset")
 
     # ------------------------------------------------------------------
     # Queue polling — bridge between worker thread and Tkinter
@@ -706,6 +757,198 @@ class MainWindow:
         self._chart.retheme()
         self._left_nb.retheme()
 
+    # ------------------------------------------------------------------
+    # Action menu handlers
+    # ------------------------------------------------------------------
+
+    def _clear_event_logs(self) -> None:
+        """Clear all text in the Events log tab."""
+        self._events_text.configure(state="normal")
+        self._events_text.delete("1.0", tk.END)
+        self._events_text.configure(state="disabled")
+
+    def _delete_data_dir(self) -> None:
+        """Delete the benchmark data directory after user confirmation."""
+        data_dir = app.data_dir
+        if not data_dir:
+            messagebox.showinfo(
+                "No Data Directory",
+                "No data directory is configured.",
+                parent=self._root,
+            )
+            return
+        if not messagebox.askyesno(
+            "Delete Data Directory",
+            f"Delete all test files in:\n{data_dir}\n\nThis cannot be undone.",
+            icon="warning",
+            parent=self._root,
+        ):
+            return
+        try:
+            delete_directory(data_dir)
+            self._log_event(f"Deleted data directory: {data_dir}")
+            self._status_label.config(text="Data directory deleted")
+        except Exception as exc:
+            messagebox.showerror("Delete Error", str(exc), parent=self._root)
+
+    def _delete_selected_benchmark(self) -> None:
+        """Delete the benchmark currently selected in the history panel."""
+        benchmark_id = self._history.get_selected_benchmark_id()
+        if not benchmark_id:
+            messagebox.showinfo(
+                "Nothing Selected",
+                "Select a benchmark in the history list first.",
+                parent=self._root,
+            )
+            return
+        if not messagebox.askyesno(
+            "Delete Benchmark",
+            "Delete the selected benchmark and all its data?\nThis cannot be undone.",
+            icon="warning",
+            parent=self._root,
+        ):
+            return
+        try:
+            from .. import db
+            db.delete_benchmark(benchmark_id)
+            self._history.refresh()
+            self._log_event(f"Deleted benchmark {benchmark_id[:8]}…")
+        except Exception as exc:
+            messagebox.showerror("Delete Error", str(exc), parent=self._root)
+
+    def _delete_all_benchmarks(self) -> None:
+        """Delete every benchmark from the history after confirmation."""
+        if not messagebox.askyesno(
+            "Delete All Benchmarks",
+            "Delete ALL benchmarks from history?\nThis cannot be undone.",
+            icon="warning",
+            parent=self._root,
+        ):
+            return
+        try:
+            from .. import db
+            db.delete_all_benchmarks()
+            self._history.refresh()
+            self._log_event("All benchmarks deleted")
+        except Exception as exc:
+            messagebox.showerror("Delete Error", str(exc), parent=self._root)
+
+    # ------------------------------------------------------------------
+    # Advanced Options dialog
+    # ------------------------------------------------------------------
+
+    def _show_advanced_options(self) -> None:
+        """Open an instant-apply Advanced Options dialog."""
+        from ..benchmark import IoEngine, SectorAlignment
+
+        dlg = tk.Toplevel(self._root)
+        dlg.title("Advanced Options")
+        dlg.resizable(False, False)
+        dlg.transient(self._root)
+        dlg.grab_set()
+
+        outer = ttk.Frame(dlg, padding=16)
+        outer.pack(fill=tk.BOTH, expand=True)
+
+        row = 0
+
+        # --- IO Engine ---
+        ttk.Label(outer, text="IO Engine").grid(
+            row=row, column=0, sticky="w", pady=4, padx=(0, 12)
+        )
+        _engine_var = tk.StringVar(value=app.io_engine.name)
+        engine_combo = ttk.Combobox(
+            outer,
+            textvariable=_engine_var,
+            values=[e.name for e in IoEngine],
+            state="readonly",
+            width=20,
+        )
+        engine_combo.grid(row=row, column=1, sticky="ew", pady=4)
+
+        def _on_engine(*_):
+            for e in IoEngine:
+                if e.name == _engine_var.get():
+                    app.io_engine = e
+                    break
+
+        engine_combo.bind("<<ComboboxSelected>>", _on_engine)
+        row += 1
+
+        # --- Sector Alignment ---
+        ttk.Label(outer, text="Sector Alignment").grid(
+            row=row, column=0, sticky="w", pady=4, padx=(0, 12)
+        )
+        _align_var = tk.StringVar(value=app.sector_alignment.name)
+        align_combo = ttk.Combobox(
+            outer,
+            textvariable=_align_var,
+            values=[s.name for s in SectorAlignment],
+            state="readonly",
+            width=20,
+        )
+        align_combo.grid(row=row, column=1, sticky="ew", pady=4)
+
+        def _on_align(*_):
+            for s in SectorAlignment:
+                if s.name == _align_var.get():
+                    app.sector_alignment = s
+                    break
+
+        align_combo.bind("<<ComboboxSelected>>", _on_align)
+        row += 1
+
+        ttk.Separator(outer, orient="horizontal").grid(
+            row=row, column=0, columnspan=2, sticky="ew", pady=8
+        )
+        row += 1
+
+        # --- Checkboxes ---
+        _direct_var = tk.BooleanVar(value=app.direct_enable)
+        ttk.Checkbutton(
+            outer,
+            text="Direct IO (unbuffered)",
+            variable=_direct_var,
+            command=lambda: setattr(app, "direct_enable", _direct_var.get()),
+        ).grid(row=row, column=0, columnspan=2, sticky="w", pady=2)
+        row += 1
+
+        _sync_var = tk.BooleanVar(value=app.write_sync_enable)
+        ttk.Checkbutton(
+            outer,
+            text="Write Sync",
+            variable=_sync_var,
+            command=lambda: setattr(app, "write_sync_enable", _sync_var.get()),
+        ).grid(row=row, column=0, columnspan=2, sticky="w", pady=2)
+        row += 1
+
+        _multi_var = tk.BooleanVar(value=app.multi_file)
+        ttk.Checkbutton(
+            outer,
+            text="Multi Data File",
+            variable=_multi_var,
+            command=lambda: setattr(app, "multi_file", _multi_var.get()),
+        ).grid(row=row, column=0, columnspan=2, sticky="w", pady=2)
+        row += 1
+
+        ttk.Separator(outer, orient="horizontal").grid(
+            row=row, column=0, columnspan=2, sticky="ew", pady=8
+        )
+        row += 1
+
+        ttk.Button(outer, text="Close", command=dlg.destroy, width=10).grid(
+            row=row, column=0, columnspan=2, pady=(0, 2)
+        )
+
+        outer.columnconfigure(1, weight=1)
+
+        # Centre over parent
+        dlg.update_idletasks()
+        px = self._root.winfo_x() + (self._root.winfo_width()  - dlg.winfo_width())  // 2
+        py = self._root.winfo_y() + (self._root.winfo_height() - dlg.winfo_height()) // 2
+        dlg.geometry(f"+{px}+{py}")
+        dlg.wait_window()
+
     def _show_about(self) -> None:
         """Show the About dialog with turtle icon on the left, info on the right."""
         dlg = tk.Toplevel(self._root)
@@ -743,8 +986,18 @@ class MainWindow:
         ttk.Label(info_frame, text=f"CPU: {app.processor_name}").pack(anchor="w", pady=2)
         ttk.Separator(info_frame, orient="horizontal").pack(fill=tk.X, pady=10)
         ttk.Label(info_frame, text="Apache License 2.0",
-                  foreground="gray").pack(anchor="w", pady=(0, 10))
-        ttk.Button(info_frame, text="OK", command=dlg.destroy, width=10).pack(anchor="w")
+                  foreground="gray").pack(anchor="w", pady=(0, 6))
+
+        # Clickable website link
+        link = tk.Label(info_frame, text="www.jdiskmark.net",
+                        foreground="#4da6ff", cursor="hand2",
+                        font=("", 9, "underline"))
+        link.pack(anchor="w", pady=(0, 10))
+        link.bind("<Button-1>", lambda _e: __import__("webbrowser").open_new_tab(
+            "https://www.jdiskmark.net"))
+
+        ttk.Button(info_frame, text="OK", command=dlg.destroy, width=7).pack(anchor="w")
+
 
         # Centre over parent
         dlg.update_idletasks()

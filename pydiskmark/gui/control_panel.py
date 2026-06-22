@@ -66,8 +66,8 @@ class ControlPanel(ttk.Frame):
         #   col 0 : fixed narrow anchor (just "Profile" / "Type" label width)
         #   col 1 : 40 % of expandable space → label overflow for rows 3-7
         #   col 2 : 60 % of expandable space → combo-only column for rows 3-7
-        self.columnconfigure(0, weight=0, minsize=55)
-        self.columnconfigure(1, weight=4, minsize=55)
+        self.columnconfigure(0, weight=0, minsize=65)
+        self.columnconfigure(1, weight=4, minsize=65)
         self.columnconfigure(2, weight=1)
 
         # --- Profile ---

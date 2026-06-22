@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import os
 import platform
+import queue
 import shutil
 import string
 import threading
@@ -130,7 +131,10 @@ class DrivesPanel(ttk.Frame):
         self._selected_path: Optional[str] = None
         self._drives: list[dict] = []
         self._bg_thread: Optional[threading.Thread] = None
-        # Incremented on each refresh; lets after() callbacks detect staleness.
+        # Thread-safe queue: background thread puts completed drive dicts here;
+        # _poll_update_queue (main thread) drains it via after().
+        self._update_queue: queue.Queue = queue.Queue()
+        # Incremented on each refresh; lets callbacks detect and ignore stale results.
         self._refresh_gen = 0
 
         self._build_ui()
@@ -276,10 +280,31 @@ class DrivesPanel(ttk.Frame):
                 if self._refresh_gen != gen:
                     return   # newer refresh started; abandon
                 _fetch_slow_metadata(drive)
-                self.after(0, self._patch_drive_row, drive, tree_iids, gen)
+                # Hand result to the main thread via the queue (thread-safe).
+                # Never call self.after() from here — Tkinter is not thread-safe.
+                self._update_queue.put((drive, tree_iids, gen))
 
         self._bg_thread = threading.Thread(target=_bg_worker, daemon=True)
         self._bg_thread.start()
+
+        # Start the main-thread poller (after() is always safe from the main thread).
+        self.after(50, self._poll_update_queue)
+
+    def _poll_update_queue(self) -> None:
+        """Main-thread poller: drains any completed drive updates from the queue.
+
+        Reschedules itself every 50 ms while the background thread is alive,
+        then stops automatically once the thread finishes and the queue is empty.
+        """
+        try:
+            while True:
+                drive, iids, gen = self._update_queue.get_nowait()
+                self._patch_drive_row(drive, iids, gen)
+        except queue.Empty:
+            pass
+        # Keep polling until the background thread has finished.
+        if self._bg_thread and self._bg_thread.is_alive():
+            self.after(50, self._poll_update_queue)
 
     def _patch_drive_row(self, drive: dict, iids: list[str], gen: int) -> None:
         """Called on the main thread (via after) to update one completed drive row."""

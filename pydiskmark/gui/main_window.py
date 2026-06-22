@@ -83,9 +83,9 @@ class _VertTabPanel(ttk.Frame):
     Works on all Tk versions with no extra dependencies.
     """
 
-    _STRIP_W    = 36           # pixel width of the strip
+    _STRIP_W    = 42           # pixel width of the strip
     _TAB_PAD    = 20           # vertical padding above/below text
-    _FONT       = ("Segoe UI", 9)
+    _FONT       = ("Segoe UI", 11)
 
     # Colour sets — retheme() picks the right set at runtime
     _ACTIVE_BG  = "#005fb8"   # blue — same in both themes
@@ -125,7 +125,7 @@ class _VertTabPanel(ttk.Frame):
         idx = len(self._tabs)
 
         # Height scales with text so nothing is clipped
-        tab_h = max(90, len(text) * 10 + self._TAB_PAD * 2)
+        tab_h = max(90, len(text) * 12 + self._TAB_PAD * 2)
         cx = self._STRIP_W // 2
 
         canvas = tk.Canvas(
@@ -229,8 +229,8 @@ class _SplashScreen:
     the main window will appear.  If omitted, falls back to screen-centre.
     """
 
-    _W = 340   # splash width  (px)
-    _H = 180   # splash height (px)
+    _W = 360   # splash width  (px)
+    _H = 210   # splash height (px) — taller to fit progress bar
 
     def __init__(
         self,
@@ -245,8 +245,9 @@ class _SplashScreen:
         self._top = tk.Toplevel(root)
         self._top.overrideredirect(True)   # no title bar / chrome
         self._top.resizable(False, False)
+        self._progress = 0.0
 
-        # ── Background colour matching the active theme ──
+        # ── Colours matching the active theme ──
         bg     = "#1c1c1c" if is_dark_theme else "#f0f0f0"
         fg     = "#e0e0e0" if is_dark_theme else "#222222"
         sub_fg = "#888888" if is_dark_theme else "#666666"
@@ -258,16 +259,16 @@ class _SplashScreen:
         inner = tk.Frame(border, bg=bg)
         inner.pack(fill=tk.BOTH, expand=True, padx=1, pady=1)
 
-        # ── Turtle icon (skipped gracefully if PIL unavailable) ──
+        # ── Turtle icon ──
         self._img_ref = None
         icon_path = Path(__file__).parent / "turtle_icon.png"
         try:
             from PIL import Image, ImageTk
             img = Image.open(str(icon_path)).resize((72, 72), Image.LANCZOS)
             self._img_ref = ImageTk.PhotoImage(img)
-            tk.Label(inner, image=self._img_ref, bg=bg, bd=0).pack(pady=(18, 4))
+            tk.Label(inner, image=self._img_ref, bg=bg, bd=0).pack(pady=(14, 4))
         except Exception:
-            tk.Label(inner, text="🐢", font=("", 36), bg=bg).pack(pady=(18, 4))
+            tk.Label(inner, text="🐢", font=("", 36), bg=bg).pack(pady=(14, 4))
 
         # ── App name ──
         tk.Label(
@@ -275,15 +276,25 @@ class _SplashScreen:
             font=("Segoe UI", 13, "bold"), bg=bg, fg=fg,
         ).pack()
 
-        # ── Loading status ──
+        # ── Status label ──
         self._status_var = tk.StringVar(value="Loading…")
         tk.Label(
             inner, textvariable=self._status_var,
             font=("Segoe UI", 9), bg=bg, fg=sub_fg,
-        ).pack(pady=(4, 16))
+        ).pack(pady=(4, 6))
 
-        # ── Position: centre over the main window region if coords supplied,
-        #    otherwise fall back to screen centre ──
+        # ── Progress bar ──
+        pb_frame = tk.Frame(inner, bg=bg)
+        pb_frame.pack(fill=tk.X, padx=16, pady=(0, 14))
+        self._pb_var = tk.DoubleVar(value=0.0)
+        self._pb = ttk.Progressbar(
+            pb_frame, variable=self._pb_var,
+            maximum=100, mode="determinate",
+            length=self._W - 48,
+        )
+        self._pb.pack(fill=tk.X)
+
+        # ── Position: centre over main window region (or screen centre) ──
         self._top.update_idletasks()
         if win_x >= 0 and win_w > 0:
             x = win_x + (win_w - self._W) // 2
@@ -297,10 +308,40 @@ class _SplashScreen:
         self._top.lift()
         self._top.update()
 
-    def set_status(self, text: str) -> None:
-        """Update the loading status label."""
+    # ------------------------------------------------------------------
+
+    def set_status(self, text: str, progress: float | None = None) -> None:
+        """Update status label and optionally advance the progress bar."""
         self._status_var.set(text)
+        if progress is not None:
+            self._progress = min(100.0, float(progress))
+            self._pb_var.set(self._progress)
         self._top.update_idletasks()
+
+    def get_progress(self) -> float:
+        return self._progress
+
+    def animate_to(self, target: float, over_ms: float) -> None:
+        """Smoothly animate the progress bar from its current value to *target*
+        (0-100) over *over_ms* milliseconds.  Blocks until complete.
+        Renders at ~60 fps using update_idletasks() to keep the splash alive.
+        """
+        import time as _t
+        if over_ms <= 0 or target <= self._progress:
+            self._pb_var.set(target)
+            self._progress = target
+            return
+        fps       = 60
+        step_s    = 1.0 / fps
+        n_steps   = max(1, int(over_ms / 1000 * fps))
+        delta     = (target - self._progress) / n_steps
+        for _ in range(n_steps):
+            self._progress += delta
+            self._pb_var.set(self._progress)
+            self._top.update_idletasks()
+            _t.sleep(step_s)
+        self._progress = target
+        self._pb_var.set(target)
 
     def close(self) -> None:
         """Destroy the splash window."""
@@ -335,7 +376,7 @@ class MainWindow:
         self._root.title(f"pydiskmark {app.VERSION}  —  {app.arch}  —  {cpu}")
 
         # Centre on screen (pre-compute position for splash alignment)
-        _WIN_W, _WIN_H = 1150, 680
+        _WIN_W, _WIN_H = 1000, 620
         self._root.update_idletasks()
         _sw = self._root.winfo_screenwidth()
         _sh = self._root.winfo_screenheight()
@@ -368,29 +409,29 @@ class MainWindow:
         self._target_tx_kb: int = 0
 
         # ── Menu bar ──────────────────────────────────────────────────────────
-        splash.set_status("Building menu…")
+        splash.set_status("Building menu…", progress=10)
         self._build_menu()
         _t = _tick("_build_menu()", _t, _steps)
 
         # ── Bottom status bar ─────────────────────────────────────────────────
-        splash.set_status("Building status bar…")
+        splash.set_status("Building status bar…", progress=18)
         self._build_bottom_bar()
         _t = _tick("_build_bottom_bar()", _t, _steps)
 
         # ── Bottom history tabs ───────────────────────────────────────────────
-        splash.set_status("Building history tabs…")
+        splash.set_status("Building history tabs…", progress=26)
         self._build_bottom_tabs()
         _t = _tick("_build_bottom_tabs()", _t, _steps)
 
         # ── Left tab panel + ControlPanel ─────────────────────────────────────
-        splash.set_status("Building control panel…")
+        splash.set_status("Building control panel…", progress=38)
         content = ttk.Frame(self._root)
         content.pack(fill=tk.BOTH, expand=True)
         self._left_nb = _VertTabPanel(content)
         self._left_nb.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         drives_page = self._left_nb.make_page()
         bench_page  = self._left_nb.make_page()
-        ctrl_frame = ttk.Frame(bench_page, width=280)
+        ctrl_frame = ttk.Frame(bench_page, width=260)
         ctrl_frame.pack(side=tk.LEFT, fill=tk.Y)
         ctrl_frame.pack_propagate(False)
         self._controls = ControlPanel(
@@ -401,8 +442,8 @@ class MainWindow:
         self._controls.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
         _t = _tick("_VertTabPanel + ControlPanel", _t, _steps)
 
-        # ── Chart (matplotlib — usually the slowest widget) ───────────────────
-        splash.set_status("Initialising matplotlib chart…")
+        # ── Chart (matplotlib) ────────────────────────────────────────────────
+        splash.set_status("Initialising matplotlib chart…", progress=52)
         ttk.Separator(bench_page, orient="vertical").pack(side=tk.LEFT, fill=tk.Y)
         chart_frame = ttk.Frame(bench_page)
         chart_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
@@ -411,7 +452,7 @@ class MainWindow:
         _t = _tick("ChartPanel (matplotlib)", _t, _steps)
 
         # ── DrivesPanel + tab registration ────────────────────────────────────
-        splash.set_status("Loading drive info…")
+        splash.set_status("Loading drive info…", progress=62)
         self._drives_panel = DrivesPanel(
             drives_page, on_location_change=self._on_location_change,
         )
@@ -430,21 +471,26 @@ class MainWindow:
         _t = _tick("bindings + refresh_status()", _t, _steps)
 
         # ── Final layout pass ─────────────────────────────────────────────────
-        splash.set_status("Laying out widgets…")
+        splash.set_status("Laying out widgets…", progress=72)
         self._root.update_idletasks()
         _t = _tick("update_idletasks()", _t, _steps)
 
-        # ── Retheme to guarantee chart colours match after layout settled ──────
-        splash.set_status("Applying theme…")
+        # ── Retheme ───────────────────────────────────────────────────────────
+        splash.set_status("Applying theme…", progress=80)
         self._chart.retheme()
         self._left_nb.retheme()
         _t = _tick("retheme() chart + tabs", _t, _steps)
 
-        # ── Reveal ────────────────────────────────────────────────────────────
-        splash.set_status("Ready")
-        splash.close()
+        # ── Reveal: alpha=0 flush trick ───────────────────────────────────────
+        splash.set_status("Ready", progress=100)
+        self._root.wm_attributes("-alpha", 0)
         self._root.deiconify()
-        _t = _tick("splash.close() + deiconify()", _t, _steps)
+        self._root.update()                       # drain full event queue while invisible
+        self._root.wm_attributes("-alpha", 1)     # snap main window to visible
+        splash.close()                            # dismiss splash only after main is opaque
+        _t = _tick("alpha=0 → deiconify → update → alpha=1 → splash.close()", _t, _steps)
+
+
 
         # ── Print startup timing breakdown ────────────────────────────────────
         total_ms = (_t - _total_start) * 1000
@@ -537,7 +583,7 @@ class MainWindow:
         bench_page = self._left_nb.make_page()
 
         # Left: settings controls (fixed width)
-        ctrl_frame = ttk.Frame(bench_page, width=280)
+        ctrl_frame = ttk.Frame(bench_page, width=260)
         ctrl_frame.pack(side=tk.LEFT, fill=tk.Y)
         ctrl_frame.pack_propagate(False)
         self._controls = ControlPanel(

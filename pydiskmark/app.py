@@ -65,7 +65,7 @@ from .benchmark import BenchmarkType, BlockSequence, IoEngine, SectorAlignment
 
 active_profile: BenchmarkProfile = BenchmarkProfile.QUICK_TEST
 profile_modified: bool = False
-benchmark_type: BenchmarkType = BenchmarkType.WRITE
+benchmark_type: BenchmarkType = BenchmarkType.READ_WRITE
 block_sequence: BlockSequence = BlockSequence.SEQUENTIAL
 num_of_samples: int = 200
 num_of_blocks: int = 32

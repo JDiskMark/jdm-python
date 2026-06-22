@@ -31,9 +31,9 @@ class HistoryPanel(ttk.Frame):
         # (id,          heading,        width, anchor)
         ("drive",    "Drive Model",   180,  "w"),
         ("profile",  "Profile",       110,  "w"),
-        ("type",     "Type",           58,  "center"),
+        ("type",     "Type",           46,  "center"),
         ("order",    "Order",          65,  "w"),
-        ("samples",  "Samples",        65,  "center"),
+        ("samples",  "Samples",        52,  "center"),
         ("blocks",   "Blocks (Size)",  90,  "e"),
         ("threads",  "Thread",         42,  "center"),
         ("start",    "Start Time",    140,  "center"),

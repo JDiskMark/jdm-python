@@ -105,7 +105,7 @@ Captured once at benchmark start; immutable during a run.
 | `app_version` | str | from version file | |
 | `profile` | BenchmarkProfile | QUICK_TEST | |
 | `profile_modified` | bool | False | |
-| `benchmark_type` | BenchmarkType | WRITE | |
+| `benchmark_type` | BenchmarkType | READ_WRITE | |
 | `block_order` | BlockSequence | SEQUENTIAL | |
 | `num_blocks` | int | 32 | blocks per sample |
 | `block_size` | int | bytes (e.g. 512*1024) | `block_size_kb * KILOBYTE` |
@@ -577,7 +577,7 @@ Format: `key=value`, one per line, `#` comment lines.
 |---|---|---|
 | `activeProfile` | `QUICK_TEST` | |
 | `profileModified` | `false` | |
-| `benchmarkType` | `WRITE` | |
+| `benchmarkType` | `READ_WRITE` | |
 | `blockSequence` | `SEQUENTIAL` | |
 | `numOfSamples` | `200` | |
 | `numOfBlocks` | `32` | |
@@ -591,9 +591,10 @@ Format: `key=value`, one per line, `#` comment lines.
 | `autoRemoveData` | `true` | |
 | `autoReset` | `true` |
 
-> **Note:** The Python port does not need to replicate GUI-only properties
-> (`theme`, `palette`, `showMaxMin`, `showDriveAccess`, `showSingleOp`,
-> `sharePortal`, `uploadResourceLocator`, `uploadProtocol`).
+> **Note:** The Python port also persists `theme`, `locationDir` to cover the
+> most-used GUI preferences. Properties not relevant to the Python port
+> (`palette`, `sharePortal`, `uploadResourceLocator`, `uploadProtocol`) are
+> omitted.
 
 ---
 
@@ -771,7 +772,7 @@ In Python, encapsulate in an `AppState` dataclass or module-level variables.
 | `sector_alignment` | SectorAlignment | ALIGN_4K | |
 | `active_profile` | BenchmarkProfile | QUICK_TEST | |
 | `profile_modified` | bool | False | |
-| `benchmark_type` | BenchmarkType | WRITE | |
+| `benchmark_type` | BenchmarkType | READ_WRITE | |
 | `block_sequence` | BlockSequence | SEQUENTIAL | |
 | `num_of_samples` | int | 200 | |
 | `num_of_blocks` | int | 32 | |
@@ -873,7 +874,7 @@ frontend's layout and functionality. It uses the same `BenchmarkRunner` /
 | Chart | `matplotlib` via `FigureCanvasTkAgg` — dual-axis, real-time, well-packaged |
 | Threading | Queue + `root.after(50ms)` polling — all Tkinter mutations on main thread |
 
-Additional runtime dependencies: `matplotlib>=3.7`, `sv-ttk>=2.5`.
+Additional runtime dependencies: `matplotlib>=3.7`, `sv-ttk>=2.5`, `Pillow>=9` (optional — used for splash and About icons; falls back to emoji if absent).
 
 ### 20.3 Layout
 
@@ -971,7 +972,38 @@ After the worker thread dies, `_poll_queue` performs one extra drain to
 catch `EVT_COMPLETE` posted just before thread exit (eliminates the
 "Benchmark cancelled" false-positive race condition).
 
-### 20.8 Persistence (`db.py`)
+### 20.8 Startup Sequence
+
+The main window is built entirely off-screen to avoid flicker:
+
+```
+1. root.withdraw()                 — hide window before building
+2. _SplashScreen shown            — borderless Toplevel, progress bar 0–100
+3. Each build step advances the progress bar (10 % → 80 %)
+4. DrivesPanel.refresh() — FAST phase only (shutil.disk_usage, <5 ms)
+   Background thread starts; results delivered via queue.Queue
+5. update_idletasks() + retheme()
+6. root.wm_attributes("-alpha", 0) — compositor-level invisible
+7. root.deiconify()
+8. root.update()                  — drain full event queue (background
+                                     patches, matplotlib draws) while invisible
+9. root.wm_attributes("-alpha", 1) — snap to fully-rendered in one frame
+10. splash.close()                — dismiss only after main window is opaque
+```
+
+**DrivesPanel two-phase refresh:**
+
+| Phase | Thread | What happens |
+|---|---|---|
+| FAST | Main | `shutil.disk_usage()` only — populates table with `"..."` in Model column, <5 ms |
+| SLOW | Daemon | `get_drive_model()`, `get_filesystem()`, `get_bus_type()`, `get_sector_sizes()` per drive; selected drive processed first |
+
+Results are handed back to the main thread via `queue.Queue` + a
+50 ms `after()` poller (`_poll_update_queue`). `self.after()` is
+**never** called from the background thread — Tkinter's `_register()`
+is not thread-safe in Python 3.14+.
+
+### 20.9 Persistence (`db.py`)
 
 **DB location:** `~/.pdm/<version>/pdm.db` (SQLite, stdlib `sqlite3`).
 
@@ -1004,7 +1036,7 @@ Benchmarks are **auto-saved** after each successful run. Double-clicking a
 row in the "Benchmark Operations" history tab replays that benchmark in the
 chart without re-running I/O.
 
-### 20.9 Benchmark Execution Flow (GUI)
+### 20.10 Benchmark Execution Flow (GUI)
 
 ```
 1. User selects drive (Drives tab) — sets location_dir
@@ -1019,21 +1051,23 @@ chart without re-running I/O.
 10. Elapsed time shown in status bar; drive info refreshed
 ```
 
-### 20.10 Export from GUI
+### 20.11 Export from GUI
 
 - **File → Export**: file dialog → JSON / YAML / CSV (reuses `exporter.export()`)
 - **Double-click history row**: replay historical benchmark in chart (no re-run)
 
-### 20.11 Design Principles
+### 20.12 Design Principles
 
 - Left-tab layout matches jdm-java (Drives | Benchmark vertical tabs)
 - Dark mode by default via sv_ttk; Options → Toggle Theme switches to light
+- Settings persisted to `~/.pdm/<version>/pdm.properties` on exit; loaded at startup
+- Default `benchmarkType` is `READ_WRITE` when no config file exists
 - Keyboard shortcuts: `Ctrl+R` (start), `Esc` (stop)
 - About dialog centred on the parent window (`transient + grab_set`)
 - Window title: `pydiskmark <version> — <arch> — <CPU>`
 - Chart suptitle: `<drive model> — <partition>: <pct>% (<used>/<total> GB)`
 
-### 20.12 Benchmark Tab — Control Panel Grid Layout
+### 20.13 Benchmark Tab — Control Panel Grid Layout
 
 The `ControlPanel` widget uses a **3-column Tkinter grid** that replicates
 jdiskmark's Swing layout. The container frame has a fixed `width=320` px

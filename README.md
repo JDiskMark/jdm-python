@@ -9,6 +9,8 @@ Sister project to [jdm-java](https://github.com/jdm-java/jdm-java).
 
 - Python 3.11+
 - Windows, macOS, or Linux
+- `matplotlib>=3.7`, `sv-ttk>=2.5` (GUI)
+- `Pillow>=9` *(optional — splash and About icons; falls back to emoji if absent)*
 
 ## Install
 
@@ -16,7 +18,17 @@ Sister project to [jdm-java](https://github.com/jdm-java/jdm-java).
 pip install -e .
 ```
 
-## Quick start
+## Launch the GUI
+
+```bash
+pydiskmark gui
+```
+
+The GUI opens with a splash screen while the main window builds off-screen.
+Settings (theme, last location, benchmark type, etc.) are persisted to
+`~/.pdm/<version>/pdm.properties` and restored on next launch.
+
+## CLI quick start
 
 ```bash
 # Run the default quick test (50 samples, 1 MB blocks, read & write)
@@ -29,12 +41,12 @@ python -m pydiskmark run -t WRITE -n 10 -e results.json
 python -m pydiskmark run --help
 ```
 
-## Common flags
+## Common CLI flags
 
 | Flag | Description |
 |---|---|
 | `-p PROFILE` | Named profile (`QUICK_TEST`, `MAX_THROUGHPUT`, …) |
-| `-t TYPE` | `READ`, `WRITE`, or `READ_WRITE` |
+| `-t TYPE` | `READ`, `WRITE`, or `READ_WRITE` (default: `READ_WRITE`) |
 | `-n N` | Number of samples |
 | `-b N` | Blocks per sample |
 | `-z KB` | Block size in KB |

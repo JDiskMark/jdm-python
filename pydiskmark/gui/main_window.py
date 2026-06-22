@@ -1134,11 +1134,11 @@ class MainWindow:
         ttk.Label(outer, text="Sector Alignment").grid(
             row=row, column=0, sticky="w", pady=4, padx=(0, 12)
         )
-        _align_var = tk.StringVar(value=app.sector_alignment.name)
+        _align_var = tk.StringVar(value=app.sector_alignment.display)
         align_combo = ttk.Combobox(
             outer,
             textvariable=_align_var,
-            values=[s.name for s in SectorAlignment],
+            values=[s.display for s in SectorAlignment],
             state="readonly",
             width=20,
         )
@@ -1146,7 +1146,7 @@ class MainWindow:
 
         def _on_align(*_):
             for s in SectorAlignment:
-                if s.name == _align_var.get():
+                if s.display == _align_var.get():
                     app.sector_alignment = s
                     break
 

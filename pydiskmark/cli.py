@@ -188,8 +188,11 @@ def _build_parser() -> argparse.ArgumentParser:
                        dest="write_sync",
                        help="Enable write-sync (fsync after each block)")
     run_p.add_argument("-a", "--alignment", dest="alignment",
-                       choices=["NONE", "ALIGN_512", "ALIGN_4K"],
-                       help="Sector alignment")
+                       choices=["NONE", "ALIGN_512", "ALIGN_4K",
+                                "ALIGN_8K", "ALIGN_16K", "ALIGN_64K"],
+                       help="Sector alignment: NONE, ALIGN_512, ALIGN_4K, "
+                            "ALIGN_8K, ALIGN_16K, ALIGN_64K. "
+                            "(Profile default used if not specified)")
     run_p.add_argument("-m", "--multi-file", action="store_true", default=None,
                        dest="multi_file",
                        help="One test file per sample")

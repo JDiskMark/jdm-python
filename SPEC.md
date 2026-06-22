@@ -79,18 +79,23 @@ MODERN — positional I/O via os.pwrite / os.pread (POSIX) or
 ```
 
 ### 4.5 `SectorAlignment`
-```
-NONE    — OS chooses buffer alignment
-ALIGN_512   — 512-byte alignment
-ALIGN_4K    — 4 096-byte alignment   ← default for MODERN engine
-ALIGN_8K    — 8 192-byte alignment
-ALIGN_16K   — 16 384-byte alignment
-ALIGN_64K   — 65 536-byte alignment
-```
+
+| Constant | Bytes | Display Label |
+|---|---|---|
+| `NONE` | -1 (OS default) | None (OS Default) |
+| `ALIGN_512` | 512 | 512 B (Legacy) |
+| `ALIGN_4K` | 4 096 | 4 KB (Standard) — **default** |
+| `ALIGN_8K` | 8 192 | 8 KB (Enterprise) |
+| `ALIGN_16K` | 16 384 | 16 KB (High-End) |
+| `ALIGN_64K` | 65 536 | 64 KB (RAID/Stripe) |
+
+Each enum member stores a `(bytes, display)` tuple, with `.bytes` and `.display`
+properties and a `__str__` that returns the display label.
 
 When `MODERN` engine is used with Direct I/O, the write/read buffer **must**
-be aligned to the selected value. In Python use `bytearray` allocated via
-`mmap` or a ctypes buffer with the required alignment.
+be aligned to the selected value. In Python, `VirtualAlloc` (Windows) returns
+64 KB-aligned memory and `mmap` (POSIX) returns page-aligned memory, both of
+which satisfy all alignment values.
 
 ---
 
@@ -615,7 +620,7 @@ Entry point: `python -m pydiskmark run [OPTIONS]`
 | `--samples` | `-n` | int | profile default | Number of samples |
 | `--direct` | `-d` | flag | False | Enable Direct I/O |
 | `--write-sync` | `-y` | flag | False | Enable write-sync |
-| `--alignment` | `-a` | str | `NONE` | Sector alignment |
+| `--alignment` | `-a` | str | `ALIGN_4K` | `NONE`, `ALIGN_512`, `ALIGN_4K`, `ALIGN_8K`, `ALIGN_16K`, `ALIGN_64K` (profile default used if not specified) |
 | `--multi-file` | `-m` | flag | False | One file per sample |
 | `--location` | `-l` | path | `$HOME` | Directory for test files |
 | `--export` | `-e` | path | None | Export results to JSON file |

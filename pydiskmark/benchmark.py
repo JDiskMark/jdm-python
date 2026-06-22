@@ -57,17 +57,29 @@ class IoEngine(Enum):
 class SectorAlignment(Enum):
     """Buffer alignment used with the MODERN engine and Direct I/O."""
 
-    NONE = -1          # OS chooses alignment
-    ALIGN_512 = 512
-    ALIGN_4K = 4_096
-    ALIGN_8K = 8_192
-    ALIGN_16K = 16_384
-    ALIGN_64K = 65_536
+    NONE      = (-1,     "None (OS Default)")
+    ALIGN_512 = (512,    "512 B (Legacy)")
+    ALIGN_4K  = (4_096,  "4 KB (Standard)")
+    ALIGN_8K  = (8_192,  "8 KB (Enterprise)")
+    ALIGN_16K = (16_384, "16 KB (High-End)")
+    ALIGN_64K = (65_536, "64 KB (RAID/Stripe)")
+
+    def __init__(self, bytes_val: int, display: str) -> None:
+        self._bytes = bytes_val
+        self._display = display
 
     @property
     def bytes(self) -> int:
         """Alignment in bytes; -1 means OS default."""
-        return self.value
+        return self._bytes
+
+    @property
+    def display(self) -> str:
+        """Human-friendly label for UI display."""
+        return self._display
+
+    def __str__(self) -> str:
+        return self._display
 
 
 # ---------------------------------------------------------------------------

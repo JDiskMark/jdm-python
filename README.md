@@ -45,7 +45,7 @@ python -m pydiskmark run --help
 
 | Flag | Description |
 |---|---|
-| `-p PROFILE` | Named profile (`QUICK_TEST`, `MAX_THROUGHPUT`, …) |
+| `-p PROFILE` | `QUICK_TEST`, `MAX_THROUGHPUT`, `HIGH_LOAD_RANDOM_T32`, `LOW_LOAD_RANDOM_T1`, `MAX_WRITE_STRESS`, `MEDIA_PLAYBACK`, `VIDEO_EXPORTING`, `PHOTO_LIBRARY` |
 | `-t TYPE` | `READ`, `WRITE`, or `READ_WRITE` (default: `READ_WRITE`) |
 | `-n N` | Number of samples |
 | `-b N` | Blocks per sample |
@@ -53,6 +53,8 @@ python -m pydiskmark run --help
 | `-T N` | Number of threads |
 | `-o ORDER` | `SEQUENTIAL` or `RANDOM` |
 | `-d` | Enable Direct I/O (bypass OS page cache) |
+| `-a ALIGN` | Sector alignment: `NONE`, `ALIGN_512`, `ALIGN_4K` (default), `ALIGN_8K`, `ALIGN_16K`, `ALIGN_64K` |
+| `-y` | Enable write-sync (fsync after each block) |
 | `-l DIR` | Directory for test files |
 | `-e FILE` | Export results (`.json`, `.yml`, `.csv`) |
 | `-v` | Verbose — print each sample as it completes |

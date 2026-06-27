@@ -55,12 +55,38 @@ def _list_drives_fast() -> list[dict]:
         for vol in Path("/Volumes").iterdir():
             candidates.append(str(vol))
     else:
+        # On Linux, only include mounts backed by a real physical block device
+        # that is a meaningful benchmark target.
+        # /proc/mounts columns: device  mountpoint  fstype  options  ...
+        #
+        # Excluded device prefixes (virtual/non-physical devices):
+        #   /dev/loop* — snap squashfs mounts (Ubuntu has 20-30+ of these)
+        #   /dev/ram*  — RAM disks
+        #   /dev/zram* — compressed RAM swap devices
+        #
+        # Excluded mountpoint prefixes (system partitions — real devices but
+        # not useful benchmark targets):
+        #   /boot      — covers both /boot and /boot/efi
+        #
+        # Deduplicate by device so bind-mounts of the same partition don't
+        # appear twice.
+        _EXCLUDE_DEV_PREFIXES   = ("/dev/loop", "/dev/ram", "/dev/zram")
+        _EXCLUDE_MOUNT_PREFIXES = ("/boot",)
+        seen_devices: set[str] = set()
         try:
             with open("/proc/mounts") as f:
                 for line in f:
                     parts = line.split()
-                    if len(parts) >= 2 and parts[1].startswith("/"):
-                        candidates.append(parts[1])
+                    if len(parts) >= 3:
+                        device, mountpoint = parts[0], parts[1]
+                        if (
+                            device.startswith("/dev/")
+                            and not any(device.startswith(p) for p in _EXCLUDE_DEV_PREFIXES)
+                            and not any(mountpoint.startswith(p) for p in _EXCLUDE_MOUNT_PREFIXES)
+                            and device not in seen_devices
+                        ):
+                            seen_devices.add(device)
+                            candidates.append(mountpoint)
         except Exception:
             candidates = ["/"]
 

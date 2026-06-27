@@ -7,16 +7,60 @@ Sister project to [jdm-java](https://github.com/jdm-java/jdm-java).
 
 ## Requirements
 
-- Python 3.11+
-- Windows, macOS, or Linux
-- `matplotlib>=3.7`, `sv-ttk>=2.5` (GUI)
-- `Pillow>=9` *(optional — splash and About icons; falls back to emoji if absent)*
+**Python:** 3.12+ (recommended minimum for the dev team)
 
-## Install
+### Python package dependencies
+
+Installed automatically by `pip install -e ".[dev]"`:
+
+| Package | Version | Purpose |
+|---|---|---|
+| `pyyaml` | ≥ 6.0 | Config / export |
+| `matplotlib` | ≥ 3.7 | Charts |
+| `sv-ttk` | ≥ 2.5 | GUI theme |
+| `Pillow` | ≥ 9 | *(optional)* Splash / About icons; falls back to emoji if absent |
+| `pytest` | ≥ 7.0 | *(dev)* Test runner |
+| `pytest-timeout` | ≥ 2.0 | *(dev)* Test timeouts |
+
+### System dependencies
+
+These must be installed at the OS level — they are **not** available via pip.
+
+| Dependency | Linux (Ubuntu/Debian) | macOS | Windows |
+|---|---|---|---|
+| Python venv support | `sudo apt install python3.12-venv` | Built-in | Built-in |
+| Tkinter (GUI) | `sudo apt install python3-tk` | Built-in | Built-in |
+
+## Development Setup (all platforms)
+
+A virtual environment is required on Linux/macOS and strongly recommended on
+Windows to isolate project dependencies from the system Python.
+
+### Linux / macOS
 
 ```bash
-pip install -e .
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
 ```
+
+> **Ubuntu:** Install system dependencies first (see Requirements above), then
+> run the three commands above. Direct `pip install` without a venv is blocked
+> by Ubuntu 24.04+ (PEP 668).
+
+### Windows
+
+```cmd
+python -m venv .venv
+.venv\Scripts\activate
+pip install -e ".[dev]"
+```
+
+Once the venv is active, `python`, `pip`, and `pydiskmark` are all available
+in your shell. Re-activate the venv each session with `source .venv/bin/activate`
+(Linux/macOS) or `.venv\Scripts\activate` (Windows).
+
+> **`.venv` is git-ignored** — each developer creates their own local venv.
 
 ## Launch the GUI
 

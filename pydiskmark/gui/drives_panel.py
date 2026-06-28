@@ -135,6 +135,50 @@ def _fetch_slow_metadata(drive: dict) -> None:
         drive.setdefault("sectors",    "-")
 
 
+def _resolve_location_for_mount(mount: str) -> str:
+    """Return a writable user-accessible location on the volume at *mount*.
+
+    Mirrors Java's DrivesPanel.resolveLocationForRoot():
+      1. If the user's home directory lives on this mount, return home.
+      2. Otherwise, if the mount root itself is writable, return it.
+      3. Fallback: return home unconditionally (safe default).
+
+    This prevents data_dir being set to e.g. '/pdm-data' (root of the
+    filesystem), which would require root privileges to create.
+    """
+    home = Path.home()
+    mount_path = Path(mount)
+    try:
+        # Check if home is on this mount by comparing the mount points.
+        home_mount = _get_home_mount()
+        if home_mount and str(mount_path) == home_mount:
+            return str(home)
+    except Exception:
+        pass
+    # Mount root writable? Use it directly.
+    if os.access(mount, os.W_OK):
+        return mount
+    # Safe fallback.
+    return str(home)
+
+
+def _get_home_mount() -> str:
+    """Return the mount point of the user's home directory by reading /proc/mounts."""
+    home = str(Path.home())
+    best = ""
+    try:
+        with open("/proc/mounts") as f:
+            for line in f:
+                parts = line.split()
+                if len(parts) >= 2:
+                    mp = parts[1]
+                    if home.startswith(mp) and len(mp) > len(best):
+                        best = mp
+    except Exception:
+        pass
+    return best
+
+
 def _check_access(path: str) -> tuple[bool, bool]:
     return os.access(path, os.R_OK), os.access(path, os.W_OK)
 
@@ -423,10 +467,18 @@ class DrivesPanel(ttk.Frame):
         self._bus_label.config(    text=f"Interface: {drive.get('bus_type', '-')}")
         self._sectors_label.config(text=f"Sector Size: {drive.get('sectors', '-')}")
 
-        app.set_location_dir(drive["path"])
-        data_dir = str(Path(drive["path"]) / "pdm-data")
+        # Resolve a writable user-accessible location on this drive.
+        # The raw mount point (e.g. '/') is often not writable by the user;
+        # prefer the home directory when it lives on the same mount.
+        import platform as _platform
+        if _platform.system() == "Linux":
+            location = _resolve_location_for_mount(drive["path"])
+        else:
+            location = drive["path"]
+        app.set_location_dir(location)
+        data_dir = str(Path(location) / "pdm-data")
         self._dir_var.set(data_dir)
-        self._on_location_change(drive["path"])
+        self._on_location_change(location)
 
     # ------------------------------------------------------------------
     # Event handlers

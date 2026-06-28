@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import ctypes
 import logging
-import mmap
 import os
 import platform
 import sys
@@ -97,24 +96,32 @@ def alloc_aligned(size: int, alignment: int) -> ctypes.Array:
         buf._alloc_ptr = ptr  # stash for free_aligned
         return buf
     else:
-        # POSIX: mmap anonymous mapping is always page-aligned
-        buf_mmap = mmap.mmap(-1, size)
-        # Wrap as ctypes array
-        buf = (ctypes.c_char * size).from_buffer(buf_mmap)
-        buf._mmap = buf_mmap  # prevent GC
+        # POSIX: use a bytearray backed ctypes array.
+        # mmap+from_buffer was previously used here but creates an "exported
+        # pointer" coupling: closing the mmap while the ctypes view is alive
+        # raises BufferError('cannot close exported pointers exist').
+        # A bytearray has no such lifetime coupling and is simpler to manage.
+        # For ext4/NVMe without O_DIRECT, page alignment is not required.
+        ba = bytearray(size)
+        buf = (ctypes.c_char * size).from_buffer(ba)
+        buf._ba = ba   # prevent GC of the bytearray
         return buf
 
 
 def free_aligned(buf: ctypes.Array) -> None:
-    """Free a buffer previously allocated by alloc_aligned."""
+    """Free a buffer previously allocated by alloc_aligned.
+
+    Windows: VirtualFree the allocation.
+    POSIX: the buffer is backed by a bytearray; just drop the reference.
+           Nothing explicit to free — the GC handles it.
+    """
     if _IS_WINDOWS and hasattr(buf, "_alloc_ptr"):
         kernel32 = ctypes.windll.kernel32
         _VirtualFree = kernel32.VirtualFree
         _VirtualFree.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_ulong]
         _VirtualFree.restype = ctypes.c_int
         _VirtualFree(buf._alloc_ptr, 0, MEM_RELEASE)
-    elif hasattr(buf, "_mmap"):
-        buf._mmap.close()
+    # POSIX bytearray-backed buffers are freed automatically by GC.
 
 
 def get_buffer_address(buf: ctypes.Array) -> int:
@@ -253,23 +260,36 @@ def _open_file_posix(
 # ---------------------------------------------------------------------------
 
 def pwrite(fd: int, buf: ctypes.Array, offset: int, nbytes: int) -> int:
-    """Write *nbytes* from *buf* at file *offset*. Returns bytes written."""
+    """Write *nbytes* from *buf* at file *offset*. Returns bytes written.
+
+    Windows: WriteFile via OVERLAPPED (see _pwrite_windows).
+    POSIX:   os.pwrite() with a memoryview — zero-copy, no intermediate bytes
+             object, identical to passing the raw buffer pointer in C.
+    """
     if _IS_WINDOWS:
         return _pwrite_windows(fd, buf, offset, nbytes)
     else:
-        return os.pwrite(fd, bytes(buf[:nbytes]), offset)
+        return os.pwrite(fd, memoryview(buf)[:nbytes], offset)
 
 
 def pread(fd: int, buf: ctypes.Array, offset: int, nbytes: int) -> int:
-    """Read *nbytes* into *buf* at file *offset*. Returns bytes read."""
+    """Read *nbytes* into *buf* at file *offset*. Returns bytes read.
+
+    Windows: ReadFile via OVERLAPPED (see _pread_windows).
+    POSIX:   os.pread() returns a bytes object; copy it into *buf* with a
+             single ctypes.memmove() call (one C-level memcpy, no Python loop).
+             The previous byte-by-byte loop was O(n) Python iterations —
+             524,288 iterations per 512 KB block — making reads ~100× slower
+             than writes.
+    """
     if _IS_WINDOWS:
         return _pread_windows(fd, buf, offset, nbytes)
     else:
         data = os.pread(fd, nbytes, offset)
-        # Copy into the provided buffer
-        for i, b in enumerate(data):
-            buf[i] = b
-        return len(data)
+        n = len(data)
+        if n:
+            ctypes.memmove(buf, data, n)
+        return n
 
 
 def _pwrite_windows(handle: int, buf: ctypes.Array, offset: int, nbytes: int) -> int:

@@ -138,27 +138,48 @@ def _fetch_slow_metadata(drive: dict) -> None:
 def _resolve_location_for_mount(mount: str) -> str:
     """Return a writable user-accessible location on the volume at *mount*.
 
-    Mirrors Java's DrivesPanel.resolveLocationForRoot():
-      1. If the user's home directory lives on this mount, return home.
-      2. Otherwise, if the mount root itself is writable, return it.
-      3. Fallback: return home unconditionally (safe default).
+    Priority for all platforms:
+      1. User's home dir, if it lives on this mount / drive letter.
+      2. Mount root itself, if it is directly writable by the current user.
+      3. Home dir as an unconditional safe fallback.
 
-    This prevents data_dir being set to e.g. '/pdm-data' (root of the
-    filesystem), which would require root privileges to create.
+    This prevents data_dir being set to e.g. '/pdm-data' or 'C:\\pdm-data',
+    which would require elevated privileges to create.
     """
+    import platform as _platform
     home = Path.home()
-    mount_path = Path(mount)
+    system = _platform.system()
+
     try:
-        # Check if home is on this mount by comparing the mount points.
-        home_mount = _get_home_mount()
-        if home_mount and str(mount_path) == home_mount:
-            return str(home)
+        if system == "Linux":
+            # Compare mount points via /proc/mounts (longest-prefix match).
+            home_mount = _get_home_mount()
+            if home_mount and str(Path(mount)) == home_mount:
+                return str(home)
+
+        elif system == "Windows":
+            # Compare drive-letter roots, e.g. 'C:\\' == 'C:\\'.
+            home_root = str(home.anchor).upper()        # e.g. 'C:\\'
+            mount_root = str(Path(mount).anchor).upper()
+            if home_root == mount_root:
+                return str(home)
+
+        elif system == "Darwin":
+            # On macOS the root volume appears as '/' and external drives as
+            # '/Volumes/Name'.  Home (/Users/…) lives on the root volume.
+            home_str = str(home)
+            mount_str = str(Path(mount))
+            if home_str.startswith(mount_str.rstrip("/") + "/") or mount_str == "/":
+                return str(home)
+
     except Exception:
         pass
-    # Mount root writable? Use it directly.
+
+    # Mount root directly writable (e.g. a data partition owned by the user)?
     if os.access(mount, os.W_OK):
         return mount
-    # Safe fallback.
+
+    # Safe fallback — home is always writable for the current user.
     return str(home)
 
 
@@ -446,11 +467,20 @@ class DrivesPanel(ttk.Frame):
 
         self._selected_path = drive["path"]
         model = drive.get("model") or drive["path"]
-        can_read, can_write = _check_access(drive["path"])
-        path_str = drive["path"].rstrip("\\/")
 
+        # Resolve a writable user-accessible location on this drive *before*
+        # checking access.  The raw mount point (e.g. '/') is often not
+        # writable by the current user; we prefer home when it lives on the
+        # same volume.  Access is then assessed on this resolved path so the
+        # card reflects where the benchmark will actually write.
+        location = _resolve_location_for_mount(drive["path"])
+        can_read, can_write = _check_access(location)
+
+        # Show the mount point as the partition label; the resolved location
+        # is visible in the Test Directory field below.
+        mount_str = drive["path"].rstrip("\\/") or drive["path"]
         self._model_label.config(text=f"Model: {model}")
-        self._partition_label.config(text=f"Partition: {path_str}")
+        self._partition_label.config(text=f"Partition: {mount_str}")
         read_str  = "Read OK"  if can_read  else "Read X"
         write_str = "Write OK" if can_write else "Write X"
         self._access_label.config(text=f"Access: {read_str}  {write_str}")
@@ -467,14 +497,6 @@ class DrivesPanel(ttk.Frame):
         self._bus_label.config(    text=f"Interface: {drive.get('bus_type', '-')}")
         self._sectors_label.config(text=f"Sector Size: {drive.get('sectors', '-')}")
 
-        # Resolve a writable user-accessible location on this drive.
-        # The raw mount point (e.g. '/') is often not writable by the user;
-        # prefer the home directory when it lives on the same mount.
-        import platform as _platform
-        if _platform.system() == "Linux":
-            location = _resolve_location_for_mount(drive["path"])
-        else:
-            location = drive["path"]
         app.set_location_dir(location)
         data_dir = str(Path(location) / "pdm-data")
         self._dir_var.set(data_dir)

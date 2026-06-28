@@ -187,10 +187,13 @@ class ControlPanel(ttk.Frame):
         self._r_iops_label = ttk.Label(results_frame, text="— —", anchor="center")
         self._r_iops_label.grid(row=3, column=2, sticky="ew", padx=3, pady=1)
 
-        # Results inner grid: metric label is fixed, Write/Read share remaining space
-        # Write column wider, Read column narrower
-        results_frame.columnconfigure(1, weight=2, minsize=80)
-        results_frame.columnconfigure(2, weight=1, minsize=50)
+        # Results inner grid: metric label is fixed; Write and Read columns
+        # share remaining space equally via a uniform group.  uniform="rv"
+        # (result value) guarantees both columns are always the same width
+        # regardless of platform font metrics — no platform-specific tweaking.
+        results_frame.columnconfigure(0, weight=0)
+        results_frame.columnconfigure(1, weight=1, minsize=65, uniform="rv")
+        results_frame.columnconfigure(2, weight=1, minsize=65, uniform="rv")
 
 
 
